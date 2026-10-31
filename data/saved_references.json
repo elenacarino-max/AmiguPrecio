@@ -1,0 +1,32 @@
+[
+  {
+    "title": "Amigurumi Elephant",
+    "price": "35.00",
+    "currency": "USD",
+    "features": ["crochet elephant", "handmade plush", "soft toy"],
+    "source_url": "https://sweetlavenderco.com/products/amigurumi_elephant",
+    "checked_at": "2026-10-31T10:45:00+01:00",
+    "source_name": "SweetLavenderCo",
+    "provenance": "saved"
+  },
+  {
+    "title": "Amigurumi Donkey & Broccoli",
+    "price": "45.00",
+    "currency": "USD",
+    "features": ["crochet donkey", "handmade", "amigurumi"],
+    "source_url": "https://sweetlavenderco.com/products/amigurumi_donkey-broccoli",
+    "checked_at": "2026-10-31T10:45:00+01:00",
+    "source_name": "SweetLavenderCo",
+    "provenance": "saved"
+  },
+  {
+    "title": "Crochet Bunny Plushie",
+    "price": "32.50",
+    "currency": "USD",
+    "features": ["amigurumi", "small rabbit", "overalls", "carrot", "handmade"],
+    "source_url": "https://sweetlavenderco.com/collections/amigurumi-toys",
+    "checked_at": "2026-10-31T10:45:00+01:00",
+    "source_name": "SweetLavenderCo",
+    "provenance": "saved"
+  }
+]

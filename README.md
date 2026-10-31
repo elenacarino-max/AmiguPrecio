@@ -4,7 +4,7 @@ MVP para que artesanas y artesanos calculen un precio rentable para sus amigurum
 
 ## Estado
 
-**Fase 1 verificada:** modelo de entrada Pydantic, cálculo determinista, interfaz Streamlit inicial y pruebas unitarias. Las consultas de mercado, agentes, MCP, LangGraph, visión e informe final pertenecen a las fases siguientes y no se simulan en esta versión.
+**Fases 1 y 2 verificadas:** cálculo determinista, interfaz Streamlit inicial, tres agentes CrewAI, análisis con Pandas/Matplotlib y servidor MCP local por `stdio`. LangGraph, visión e informe final pertenecen a las fases siguientes y no se simulan en esta versión.
 
 La fórmula implementada es:
 
@@ -76,7 +76,7 @@ uv run ruff check .
 ## Hoja de ruta mínima
 
 1. **Fase 1:** calculadora validada e interfaz base. Completada.
-2. **Fase 2:** tres agentes CrewAI y herramientas; servidor y cliente MCP reales.
+2. **Fase 2:** tres agentes CrewAI y herramientas; servidor y cliente MCP reales. Completada.
 3. **Fase 3:** LangGraph con revisión limitada, errores, presupuesto, pausa/reanudación y visión.
 4. **Fase 4:** comparación, gráfico, informe, aprobación/rechazo y pruebas de integración.
 5. **Fase 5:** auditoría contra el briefing, documentación y guion de demo.
@@ -84,4 +84,20 @@ uv run ruff check .
 ## Fuente de requisitos
 
 El briefing oficial se conserva en `docs/briefing.pdf`. Sus mínimos prevalecen sobre decisiones auxiliares de implementación.
+
+## Fase 2: agentes y MCP
+
+La crew usa `Process.sequential` y contiene exactamente tres agentes: investigador, analista y asesor comercial. El investigador recibe la herramienta `search_market_references` mediante `MCPServerStdio`; el analista utiliza la calculadora existente, Pandas y Matplotlib; la tarea final exige `CommercialAssessment` como salida Pydantic.
+
+La fuente en directo es el catálogo JSON público de SweetLavenderCo. La consulta tiene un timeout, un máximo de tres resultados y conserva URL, precio, moneda, fecha y procedencia `live`. Si falla o queda vacía, se consulta `data/amigurumis_referencias.csv` y cada registro se marca como `saved`. El CSV contiene 12 productos terminados verificados en tres tiendas; no contiene patrones, kits ni precios ambiguos.
+
+```powershell
+# Demostración MCP reproducible, sin LLM ni llamadas de pago
+uv run python examples/phase2_demo.py
+
+# Solo con credenciales y cuando se quiera probar la crew completa
+uv run python examples/phase2_demo.py --run-llm
+```
+
+La API de Mercado Libre se probó como posible fuente, pero respondió HTTP 403. No se oculta como fuente funcional ni se sustituye por datos simulados. Los precios en USD no se convierten automáticamente a EUR; comparar monedas distintas requiere conversión explícita en una fase posterior.
 
