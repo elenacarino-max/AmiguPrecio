@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amiguprecio"
+version = "0.1.0"
+description = "MVP multiagente para calcular y contrastar precios de amigurumis"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "crewai>=1.15.29,<2",
+  "langgraph>=1.2,<2",
+  "matplotlib>=3.11,<4",
+  # CrewAI 1.15.x integra la rama mantenida 1.x del SDK MCP.
+  "mcp>=1.30,<2",
+  # CrewAI 1.15.x aun requiere OpenAI Python 2.x.
+  "openai>=2.30,<3",
+  "pandas>=3.1,<4",
+  # CrewAI 1.15.x fija Pydantic <2.13; 2.12 mantiene la API v2 usada aqui.
+  "pydantic>=2.12,<2.13",
+  "python-dotenv>=1.1,<2",
+  "streamlit>=1.66,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4,<10",
+  "pytest-cov>=7,<8",
+  "ruff>=0.14,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/amiguprecio"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint.isort]
+known-first-party = ["amiguprecio"]
+
