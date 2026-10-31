@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 from amiguprecio import PricingInput, calculate_price
@@ -44,11 +43,8 @@ def main() -> None:
     print(statistics.model_dump_json(indent=2))
     print(assessment_preview.model_dump_json(indent=2))
     print(f"Gráfico reproducible: {chart}")
-    crew = create_crew()
-    print(f"Agentes CrewAI configurados: {len(crew.agents)}")
     if args.run_llm:
-        if not os.getenv("OPENAI_API_KEY"):
-            raise SystemExit("Falta OPENAI_API_KEY; no se realiza ninguna llamada de pago.")
+        crew = create_crew(output_log_file="output/logs/crewai-real.json")
         output = crew.kickoff(
             inputs={
                 "product_type": "muñeca amigurumi",
@@ -64,6 +60,8 @@ def main() -> None:
             }
         )
         print(output)
+    else:
+        print("CrewAI configurado; usa --run-llm para ejecutar llamadas externas.")
 
 
 if __name__ == "__main__":

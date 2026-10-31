@@ -99,5 +99,10 @@ uv run python examples/phase2_demo.py
 uv run python examples/phase2_demo.py --run-llm
 ```
 
+La ejecución real usa `GROQ_API_KEY` y permite seleccionar el modelo con
+`GROQ_MODEL`. El valor recomendado actualmente es `groq/openai/gpt-oss-20b`;
+el prefijo `groq/` corresponde al enrutado de LiteLLM y el identificador del
+modelo publicado por Groq es `openai/gpt-oss-20b`.
+
 La API de Mercado Libre se probó como posible fuente, pero respondió HTTP 403. No se oculta como fuente funcional ni se sustituye por datos simulados. Los precios en USD no se convierten automáticamente a EUR; comparar monedas distintas requiere conversión explícita en una fase posterior.
 

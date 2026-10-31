@@ -9,7 +9,7 @@ description = "MVP multiagente para calcular y contrastar precios de amigurumis"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-  "crewai>=1.15.29,<2",
+  "crewai[litellm]>=1.15.29,<2",
   "langgraph>=1.2,<2",
   "matplotlib>=3.11,<4",
   # CrewAI 1.15.x integra la rama mantenida 1.x del SDK MCP.
