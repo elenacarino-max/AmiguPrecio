@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
@@ -13,15 +12,22 @@ from urllib.parse import urlsplit
 
 from crewai import LLM, Agent, Crew, Process, Task
 from crewai.llms.cache import CACHE_BREAKPOINT_KEY
-from crewai.mcp import MCPServerStdio
 from crewai.tools import BaseTool
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+)
 
 from amiguprecio.analysis import calculate_market_statistics, create_price_chart
+from amiguprecio.mcp_client import search_references_mcp_sync
 from amiguprecio.models import PricingInput
 from amiguprecio.pricing import calculate_price
-from amiguprecio.references import MarketReference
+from amiguprecio.references import MarketReference, ReferenceSearchResult
 
 
 def _parse_finite_decimal(value: str, *, positive: bool = False) -> Decimal:
@@ -161,6 +167,38 @@ class PricingAnalysisTool(BaseTool):
         return result
 
 
+class MCPReferenceSearchInput(BaseModel):
+    query: str
+    max_results: int = Field(default=3, ge=1, le=3)
+    live: bool = False
+
+
+class MCPReferenceSearchTool(BaseTool):
+    """Herramienta CrewAI que conserva el resultado tipado del cliente MCP real."""
+
+    name: str = "search_market_references"
+    description: str = (
+        "Consulta una vez el servidor MCP y devuelve referencias comerciales verificadas."
+    )
+    args_schema: type[BaseModel] = MCPReferenceSearchInput
+    result_as_answer: bool = True
+    max_usage_count: int | None = 1
+    _last_result: ReferenceSearchResult | None = PrivateAttr(default=None)
+
+    @property
+    def last_result(self) -> ReferenceSearchResult | None:
+        return self._last_result
+
+    def _run(self, **kwargs: object) -> dict:
+        tool_input = MCPReferenceSearchInput.model_validate(kwargs)
+        self._last_result = search_references_mcp_sync(
+            query=tool_input.query,
+            max_results=tool_input.max_results,
+            live=tool_input.live,
+        )
+        return self._last_result.model_dump(mode="json")
+
+
 class CommercialAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -168,6 +206,17 @@ class CommercialAssessment(BaseModel):
     market_position: str
     recommendation: str
     limitations: list[str]
+
+    @field_validator("limitations", mode="before")
+    @classmethod
+    def normalize_single_limitation(cls, value: object) -> object:
+        """Normaliza solo el caso real de una limitación textual única."""
+
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str) and value.strip():
+            return [value]
+        raise ValueError("limitations debe ser un array JSON de cadenas no vacío")
 
 
 class AssessmentValidationError(ValueError):
@@ -216,7 +265,6 @@ def ensure_assessment_uses_authoritative_numbers(
 ) -> None:
     """Rechaza cifras decimales del asesor que no aparezcan en la traza Python."""
 
-    allowed = _collect_authoritative_decimals(python_trace)
     narrative = " ".join(
         [
             assessment.comparability,
@@ -225,6 +273,15 @@ def ensure_assessment_uses_authoritative_numbers(
             *assessment.limitations,
         ]
     )
+    ensure_text_uses_authoritative_numbers(narrative, python_trace)
+
+
+def ensure_text_uses_authoritative_numbers(
+    narrative: str, python_trace: dict[str, object]
+) -> None:
+    """Impide que una redacción del LLM introduzca decimales no oficiales."""
+
+    allowed = _collect_authoritative_decimals(python_trace)
     claims = {
         Decimal(match.replace(",", ".")).quantize(Decimal("0.01"))
         for match in _DECIMAL_CLAIM.findall(narrative)
@@ -252,40 +309,77 @@ class GroqCompatibleLLM(LLM):
         ]
 
 
-def create_llm() -> LLM:
-    """Construye el LLM sin registrar credenciales y con un presupuesto acotado."""
+def create_llm(
+    *,
+    model_env: str = "GROQ_MODEL",
+    max_tokens: int = 600,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+    | None = None,
+    include_reasoning: bool | None = None,
+    max_retries: int = 1,
+) -> LLM:
+    """Construye un LLM Groq configurable sin registrar credenciales."""
 
     load_dotenv()
-    model = os.getenv("GROQ_MODEL", "groq/openai/gpt-oss-20b")
+    model = os.getenv(model_env) or os.getenv(
+        "GROQ_MODEL", "groq/openai/gpt-oss-20b"
+    )
     api_key = os.getenv("GROQ_API_KEY")
     if model.startswith("groq/") and not api_key:
         raise RuntimeError("Falta GROQ_API_KEY para ejecutar CrewAI con Groq")
     llm_class = GroqCompatibleLLM if model.startswith("groq/") else LLM
+    kwargs: dict[str, object] = {
+        "model": model,
+        "api_key": api_key,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "timeout": 60,
+        "max_retries": max_retries,
+        "stream": False,
+    }
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+    if include_reasoning is not None:
+        kwargs["include_reasoning"] = include_reasoning
     return llm_class(
-        model=model,
-        api_key=api_key,
-        temperature=0,
-        max_tokens=600,
-        timeout=60,
-        max_retries=1,
+        **kwargs,
     )
 
 
-def create_agents(llm: LLM | None = None) -> tuple[Agent, Agent, Agent]:
-    llm = llm or create_llm()
-    project_root = Path(__file__).parents[2]
-    mcp_config = MCPServerStdio(
-        command=sys.executable,
-        args=["-m", "amiguprecio.mcp_server"],
-        env={"PYTHONPATH": str(project_root / "src")},
-        cache_tools_list=True,
+def create_agents(
+    llm: LLM | None = None,
+    research_tool: MCPReferenceSearchTool | None = None,
+    analyst_llm: LLM | None = None,
+    advisor_llm: LLM | None = None,
+) -> tuple[Agent, Agent, Agent]:
+    researcher_llm = llm or create_llm()
+    analyst_llm = analyst_llm or (
+        llm
+        or create_llm(
+            model_env="GROQ_ANALYST_MODEL",
+            max_tokens=1200,
+            reasoning_effort="low",
+            include_reasoning=False,
+            max_retries=0,
+        )
     )
+    advisor_llm = advisor_llm or (
+        llm
+        or create_llm(
+            model_env="GROQ_ADVISOR_MODEL",
+            max_tokens=1200,
+            reasoning_effort="low",
+            include_reasoning=False,
+            max_retries=0,
+        )
+    )
+    research_tool = research_tool or MCPReferenceSearchTool()
     researcher = Agent(
         role="Investigador de mercado de amigurumis",
         goal="Obtener hasta tres referencias comerciales verificables y distinguir datos en directo de guardados.",
         backstory="Especialista prudente en investigación comercial que nunca inventa precios ni fuentes.",
-        mcps=[mcp_config],
-        llm=llm,
+        tools=[research_tool],
+        llm=researcher_llm,
         allow_delegation=False,
         max_iter=2,
         max_retry_limit=1,
@@ -293,13 +387,13 @@ def create_agents(llm: LLM | None = None) -> tuple[Agent, Agent, Agent]:
     )
     analyst = Agent(
         role="Analista de costes y precios",
-        goal="Calcular costes y estadísticas usando exclusivamente herramientas Python reproducibles.",
-        backstory="Analista cuantitativo que separa precio rentable de precio observado en el mercado.",
-        tools=[PricingAnalysisTool()],
-        llm=llm,
+        goal="Interpretar cálculos Python validados sin recalcular ni sustituir sus cifras.",
+        backstory="Analista cuantitativo que distingue resultados oficiales de observaciones comerciales.",
+        tools=[],
+        llm=analyst_llm,
         allow_delegation=False,
         max_iter=1,
-        max_retry_limit=1,
+        max_retry_limit=0,
         verbose=False,
     )
     advisor = Agent(
@@ -307,10 +401,10 @@ def create_agents(llm: LLM | None = None) -> tuple[Agent, Agent, Agent]:
         goal="Evaluar comparabilidad y redactar una valoración estructurada sin inventar demanda ni ventas.",
         backstory="Asesor escéptico que explicita limitaciones y evita conclusiones cuando faltan datos.",
         tools=[],
-        llm=llm,
+        llm=advisor_llm,
         allow_delegation=False,
         max_iter=1,
-        max_retry_limit=1,
+        max_retry_limit=0,
         verbose=False,
     )
     return researcher, analyst, advisor

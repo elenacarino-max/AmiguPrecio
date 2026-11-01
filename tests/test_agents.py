@@ -3,6 +3,7 @@ import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
 from crewai import LLM
 from pydantic import ValidationError
 
@@ -24,8 +25,9 @@ def test_exactly_three_agents_are_configured(monkeypatch, tmp_path) -> None:
         "Analista de costes y precios",
         "Asesor comercial de producto artesanal",
     ]
-    assert len(researcher.mcps) == 1
-    assert len(analyst.tools) == 1
+    assert len(researcher.tools) == 1
+    assert researcher.tools[0].name == "search_market_references"
+    assert analyst.tools == []
     assert advisor.tools == []
 
 
@@ -37,7 +39,7 @@ def test_crew_uses_sequential_process(monkeypatch, tmp_path) -> None:
     assert len(crew.agents) == 3
     assert len(crew.tasks) == 3
     assert crew.process == agents_module.Process.sequential
-    assert crew.agents[1].tools[0].result_as_answer is True
+    assert crew.agents[0].tools[0].result_as_answer is True
     assert crew.tasks[-1].output_pydantic is None
     assert crew.tasks[-1].output_json is None
 
@@ -60,6 +62,30 @@ def test_groq_messages_do_not_include_cache_breakpoint() -> None:
 
     assert formatted == [{"role": "system", "content": "Conserva este contenido"}]
     assert original[0]["cache_breakpoint"] is True
+
+
+def test_adjusted_analyst_parameters_reach_litellm_contract(monkeypatch) -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+    monkeypatch.setenv("GROQ_API_KEY", "unit-test-placeholder")
+    llm = agents_module.create_llm(
+        model_env="GROQ_ANALYST_MODEL",
+        max_tokens=1200,
+        reasoning_effort="low",
+        include_reasoning=False,
+        max_retries=0,
+    )
+
+    params = llm._prepare_completion_params(
+        [{"role": "user", "content": "Resumen breve"}], tools=None
+    )
+
+    assert params["model"] == "groq/openai/gpt-oss-20b"
+    assert params["max_tokens"] == 1200
+    assert params["reasoning_effort"] == "low"
+    assert params["include_reasoning"] is False
+    assert params["stream"] is False
+    assert "tools" not in params
+    assert "response_format" not in params
 
 
 def test_tool_schema_uses_simple_decimal_strings_for_groq() -> None:
@@ -209,6 +235,52 @@ def test_advisor_json_is_validated_after_agent_execution() -> None:
     )
 
     assert assessment.comparability.startswith("Insuficiente")
+
+
+def test_advisor_limitations_list_is_preserved() -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+    limitations = ["Sin referencias EUR", "Muestra insuficiente"]
+
+    assessment = agents_module.CommercialAssessment(
+        comparability="Insuficiente",
+        market_position="No determinable",
+        recommendation="Mantener el precio oficial",
+        limitations=limitations,
+    )
+
+    assert assessment.limitations == limitations
+
+
+def test_real_advisor_string_limitation_is_normalized_without_rewriting() -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+    real_limitation = (
+        "Lack of market mean, no valid references, only internal margin used; "
+        "currency reference USD mentioned but no data provided."
+    )
+    raw_output = json.dumps(
+        {
+            "comparability": "No comparable market data available.",
+            "market_position": "No external benchmark.",
+            "recommendation": "Seek external market data.",
+            "limitations": real_limitation,
+        }
+    )
+
+    assessment = agents_module.validate_commercial_assessment(raw_output)
+
+    assert assessment.limitations == [real_limitation]
+
+
+def test_advisor_incompatible_limitations_type_is_rejected() -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+
+    with pytest.raises(ValidationError, match="limitations"):
+        agents_module.CommercialAssessment(
+            comparability="Insuficiente",
+            market_position="No determinable",
+            recommendation="Mantener el precio oficial",
+            limitations={"reason": "Sin referencias EUR"},
+        )
 
 
 def test_invalid_advisor_json_is_rejected() -> None:

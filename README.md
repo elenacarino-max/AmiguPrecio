@@ -4,7 +4,10 @@ MVP para que artesanas y artesanos calculen un precio rentable para sus amigurum
 
 ## Estado
 
-**Fases 1 y 2 verificadas:** cálculo determinista, interfaz Streamlit inicial, tres agentes CrewAI, análisis con Pandas/Matplotlib y servidor MCP local por `stdio`. LangGraph, visión e informe final pertenecen a las fases siguientes y no se simulan en esta versión.
+**Fase 3 funcional:** cálculo determinista, interfaz Streamlit inicial, tres agentes
+CrewAI, servidor MCP local, análisis con Pandas/Matplotlib y un `StateGraph` con
+revisión limitada, interrupción humana, reanudación e informe Markdown. La visión
+y la integración de imágenes todavía no están implementadas.
 
 La fórmula implementada es:
 
@@ -40,9 +43,11 @@ AmiguPrecio/
 ├── app.py
 ├── docs/briefing.pdf
 ├── src/amiguprecio/
-│   ├── models.py
-│   └── pricing.py
-├── tests/test_pricing.py
+│   ├── agents.py
+│   ├── langgraph_workflow.py
+│   ├── reporting.py
+│   └── workflow.py
+├── tests/
 ├── .env.example
 └── pyproject.toml
 ```
@@ -77,8 +82,9 @@ uv run ruff check .
 
 1. **Fase 1:** calculadora validada e interfaz base. Completada.
 2. **Fase 2:** tres agentes CrewAI y herramientas; servidor y cliente MCP reales. Completada.
-3. **Fase 3:** LangGraph con revisión limitada, errores, presupuesto, pausa/reanudación y visión.
-4. **Fase 4:** comparación, gráfico, informe, aprobación/rechazo y pruebas de integración.
+3. **Fase 3:** flujo híbrido y LangGraph con revisión limitada, errores,
+   pausa/reanudación e informe. Completada salvo visión.
+4. **Fase 4:** visión, integración de imagen y ajustes finales de interfaz.
 5. **Fase 5:** auditoría contra el briefing, documentación y guion de demo.
 
 ## Fuente de requisitos
@@ -87,7 +93,10 @@ El briefing oficial se conserva en `docs/briefing.pdf`. Sus mínimos prevalecen 
 
 ## Fase 2: agentes y MCP
 
-La crew usa `Process.sequential` y contiene exactamente tres agentes: investigador, analista y asesor comercial. El investigador recibe la herramienta `search_market_references` mediante `MCPServerStdio`; el analista utiliza la calculadora existente, Pandas y Matplotlib; la tarea final exige `CommercialAssessment` como salida Pydantic.
+La solución contiene exactamente tres agentes: investigador, analista y asesor
+comercial. El investigador recibe `search_market_references`, que usa el cliente y
+servidor MCP reales; el cálculo Python se ejecuta fuera del LLM; y la salida del
+asesor se valida localmente mediante `CommercialAssessment`.
 
 La fuente en directo es el catálogo JSON público de SweetLavenderCo. La consulta tiene un timeout, un máximo de tres resultados y conserva URL, precio, moneda, fecha y procedencia `live`. Si falla o queda vacía, se consulta `data/amigurumis_referencias.csv` y cada registro se marca como `saved`. El CSV contiene 12 productos terminados verificados en tres tiendas; no contiene patrones, kits ni precios ambiguos.
 
@@ -104,5 +113,44 @@ La ejecución real usa `GROQ_API_KEY` y permite seleccionar el modelo con
 el prefijo `groq/` corresponde al enrutado de LiteLLM y el identificador del
 modelo publicado por Groq es `openai/gpt-oss-20b`.
 
+### Flujo híbrido verificable
+
+La ejecución de Fase 3 separa responsabilidades deliberadamente:
+
+1. El investigador CrewAI invoca autónomamente `search_market_references`, una
+   herramienta que usa el cliente y servidor MCP reales y conserva el resultado
+   original como modelos Pydantic.
+2. El coordinador Python invoca `PricingAnalysisTool` directamente una sola vez.
+   Esta ejecución no se presenta como una decisión autónoma del LLM y constituye
+   la fuente oficial de costes, precio, estadísticas y gráfico.
+3. El analista CrewAI interpreta el resultado Python sin herramientas ni capacidad
+   para sobrescribir cifras.
+4. El asesor CrewAI genera JSON cualitativo, validado después mediante
+   `CommercialAssessment` y comprobado contra los valores oficiales.
+
+Cada etapa conserva resultados parciales. Si un agente falla o devuelve una salida
+vacía, no se repiten la consulta MCP ni los cálculos deterministas.
+
 La API de Mercado Libre se probó como posible fuente, pero respondió HTTP 403. No se oculta como fuente funcional ni se sustituye por datos simulados. Los precios en USD no se convierten automáticamente a EUR; comparar monedas distintas requiere conversión explícita en una fase posterior.
+
+### LangGraph y aprobación humana
+
+`src/amiguprecio/langgraph_workflow.py` construye el recorrido investigación →
+cálculo → analista → asesor → revisión → aprobación → informe. El estado de
+checkpoint usa representaciones JSON y se revalida con Pydantic al entrar en cada
+componente. La revisión permite como máximo un reintento del analista o asesor y
+nunca repite automáticamente MCP ni un cálculo correcto.
+
+El nodo de aprobación llama a `interrupt()`. La ejecución debe continuar mediante
+`Command(resume=...)` y el mismo `thread_id`. Un rechazo termina sin escribir el
+informe; una aprobación explícita genera un único Markdown.
+
+```powershell
+# Ejecución real e interactiva; consume Groq y consulta MCP una sola vez
+uv run python examples/phase3_langgraph.py
+```
+
+Las pruebas de LangGraph usan sustitutos deterministas. Demuestran el flujo, los
+errores, el reintento acotado y la pausa/reanudación, pero no se presentan como
+ejecuciones reales de IA.
 

@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 
+from amiguprecio import PricingInput
 from amiguprecio.agents import (
     PricingAnalysisTool,
-    create_crew,
     create_llm,
-    ensure_assessment_uses_authoritative_numbers,
-    validate_commercial_assessment,
 )
+from amiguprecio.workflow import run_hybrid_workflow
 
 
 def smoke_test() -> None:
@@ -58,41 +56,26 @@ def tool_schema_smoke_test() -> None:
 
 
 def main() -> None:
-    output_dir = Path("output/logs")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    log_path = output_dir / "crewai-real.json"
-    pricing_trace_path = output_dir / "pricing-tool-real.json"
-    os.environ["AMIGUPRECIO_PRICING_TRACE"] = str(pricing_trace_path)
-    crew = create_crew(output_log_file=str(log_path))
-    result = crew.kickoff(
-        inputs={
-            "product_type": "muñeca amigurumi terminada",
-            "pricing_data": {
-                "product_name": "Luna",
-                "product_type": "muñeca amigurumi terminada",
-                "materials_cost": "12.50",
-                "hours_worked": "5",
-                "hourly_rate": "10",
-                "other_expenses": "2.50",
-                "margin_percent": "20",
-                "pricing_currency": "EUR",
-                "chart_path": "output/charts/phase3-real.png",
-            },
-        }
+    output_dir = Path("output/hybrid")
+    result = run_hybrid_workflow(
+        pricing_input=PricingInput(
+            product_name="Luna",
+            product_type="muñeca amigurumi terminada",
+            materials_cost="12.50",
+            hours_worked="5",
+            hourly_rate="10",
+            other_expenses="2.50",
+            margin_percent="20",
+        ),
+        query="muñeca amigurumi terminada",
+        output_dir=output_dir,
     )
-    assessment = validate_commercial_assessment(result.tasks_output[-1].raw)
-    pricing_trace = json.loads(pricing_trace_path.read_text(encoding="utf-8"))
-    ensure_assessment_uses_authoritative_numbers(assessment, pricing_trace)
-    summary = {
-        "agents": [agent.role for agent in crew.agents],
-        "task_count": len(result.tasks_output),
-        "assessment": assessment.model_dump(mode="json"),
-        "pricing": pricing_trace["python_result"]["pricing"],
-        "pricing_trace_path": str(pricing_trace_path),
-        "usage": result.token_usage.model_dump(mode="json"),
-        "log_path": str(log_path),
-    }
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    result_path = output_dir / "workflow-result.json"
+    result_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+    print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
+    if not result.completed:
+        raise RuntimeError("El flujo híbrido no completó los tres agentes")
 
 
 if __name__ == "__main__":
