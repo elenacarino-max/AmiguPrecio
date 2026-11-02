@@ -14,7 +14,11 @@ from amiguprecio.references import ReferenceSearchResult
 
 
 async def search_references_mcp(
-    query: str, max_results: int = 3, live: bool = True, timeout_seconds: float = 15.0
+    query: str,
+    max_results: int = 3,
+    live: bool = True,
+    currency: str | None = None,
+    timeout_seconds: float = 15.0,
 ) -> ReferenceSearchResult:
     """Lanza el servidor stdio, negocia MCP y llama a su herramienta."""
 
@@ -36,7 +40,12 @@ async def search_references_mcp(
                 raise RuntimeError("El servidor MCP no expone la herramienta esperada")
             result = await session.call_tool(
                 "search_market_references",
-                {"query": query, "max_results": min(max_results, 3), "live": live},
+                {
+                    "query": query,
+                    "max_results": min(max_results, 3),
+                    "live": live,
+                    "currency": currency,
+                },
             )
             if result.isError:
                 raise RuntimeError("La herramienta MCP devolvió un error")
@@ -55,6 +64,16 @@ async def search_references_mcp(
 
 
 def search_references_mcp_sync(
-    query: str, max_results: int = 3, live: bool = True
+    query: str,
+    max_results: int = 3,
+    live: bool = True,
+    currency: str | None = None,
 ) -> ReferenceSearchResult:
-    return asyncio.run(search_references_mcp(query, max_results=max_results, live=live))
+    return asyncio.run(
+        search_references_mcp(
+            query,
+            max_results=max_results,
+            live=live,
+            currency=currency,
+        )
+    )

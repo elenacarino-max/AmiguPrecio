@@ -1,120 +1,246 @@
-"""Interfaz Streamlit de la Fase 1 de AmiguPrecio."""
+"""Interfaz completa de AmiguPrecio sobre el flujo LangGraph real."""
+
+from __future__ import annotations
+
+from pathlib import Path
 
 import streamlit as st
 from pydantic import ValidationError
 
-from amiguprecio import PricingInput, calculate_price
+from amiguprecio.app_runtime import WorkflowExecution
+from amiguprecio.models import PricingInput
+from amiguprecio.vision import ImageValidationError, prepare_uploaded_image
 
-st.set_page_config(page_title="AmiguPrecio", layout="centered")
+OUTPUT_ROOT = Path("output/streamlit")
+STAGE_LABELS = {
+    "research": "Referencias verificadas mediante MCP",
+    "calculation": "Cálculo Python y gráfico completados",
+    "analyst": "Interpretación del analista completada",
+    "advisor": "Valoración comercial y visión procesadas",
+    "review": "Coherencia y trazabilidad validadas",
+    "approval": "Esperando tu decisión",
+    "report": "Informe aprobado y guardado",
+}
+
+st.set_page_config(page_title="AmiguPrecio", layout="wide")
 st.markdown(
     """
     <style>
     :root {
-        --bg: #fbf6ec;
-        --surface: #fffdf8;
-        --text: #2b2926;
-        --muted: #625d55;
-        --border: #ded5c6;
-        --brand: #375b4a;
-        --action: #b94f3d;
-        --action-hover: #9e4032;
-        --action-tint: #f8e4df;
+        --canvas: #fbf6ec; --paper: #fffdf8; --ink: #292724;
+        --muted: #655f57; --line: #ddd2c1; --green: #315b48;
+        --green-soft: #e5eee8; --coral: #b9503e; --coral-dark: #963e31;
+        --coral-soft: #f7e3dd;
     }
-    .stApp { background: var(--bg); color: var(--text); }
-    .block-container { max-width: 780px; padding-top: 3rem; padding-bottom: 4rem; }
-    h1, h2, h3 { color: var(--brand); letter-spacing: -0.02em; }
+    .stApp { background: var(--canvas); color: var(--ink); }
+    .block-container { max-width: 1120px; padding: 2.5rem 2rem 5rem; }
+    h1, h2, h3 { color: var(--green); letter-spacing: -.025em; }
     p, label, [data-testid="stCaptionContainer"] { color: var(--muted); }
-    .amigu-eyebrow {
-        color: var(--brand);
-        font-size: .75rem;
-        font-weight: 700;
-        letter-spacing: .14em;
-        padding-bottom: .8rem;
-        border-bottom: 1px dashed var(--border);
-        margin-bottom: 1.25rem;
-    }
-    div.stButton > button {
-        background: var(--action);
-        color: white;
-        border: 1px solid var(--action);
-        border-radius: .35rem;
-        font-weight: 700;
-    }
-    div.stButton > button:hover { background: var(--action-hover); border-color: var(--action-hover); }
-    div.stButton > button:focus-visible {
-        outline: 3px solid var(--action-tint);
-        outline-offset: 2px;
-    }
-    [data-testid="stMetric"] {
-        background: transparent;
-        border-top: 2px solid var(--brand);
-        border-bottom: 1px solid var(--border);
-        padding: .85rem .15rem 1rem;
-    }
-    [data-testid="stForm"] {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: .5rem;
-        padding: 1.25rem;
-    }
-    input:focus-visible, textarea:focus-visible, button:focus-visible {
-        outline-color: var(--brand) !important;
+    .brand-line { color: var(--green); font-size: .74rem; font-weight: 750;
+        letter-spacing: .13em; border-bottom: 1px dashed var(--line);
+        padding-bottom: .85rem; margin-bottom: 1.4rem; }
+    .intro { max-width: 720px; font-size: 1.05rem; line-height: 1.6; }
+    [data-testid="stForm"] { background: var(--paper); border: 1px solid var(--line);
+        border-radius: .55rem; padding: 1.35rem; }
+    div.stButton > button[kind="primary"], div.stFormSubmitButton > button {
+        background: var(--coral); color: white; border-color: var(--coral);
+        border-radius: .38rem; font-weight: 750; }
+    div.stButton > button[kind="primary"]:hover, div.stFormSubmitButton > button:hover {
+        background: var(--coral-dark); border-color: var(--coral-dark); }
+    button:focus-visible, input:focus-visible, textarea:focus-visible {
+        outline: 3px solid var(--coral-soft) !important; outline-offset: 2px; }
+    [data-testid="stMetric"] { border-top: 2px solid var(--green);
+        border-bottom: 1px solid var(--line); padding: .8rem .15rem 1rem;
+        background: transparent; }
+    .status-ok { background: var(--green-soft); border-left: 4px solid var(--green);
+        padding: .8rem 1rem; margin: 1rem 0; }
+    .privacy-note { border-left: 3px solid var(--coral); padding-left: .8rem;
+        color: var(--muted); font-size: .88rem; }
+    @media (max-width: 700px) {
+        .block-container { padding: 3.5rem 1rem 3rem; }
+        h1 { font-size: 2rem !important; }
+        .brand-line { font-size: .67rem; line-height: 1.45; }
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+
+def _render_results(execution: WorkflowExecution) -> None:
+    values = execution.values
+    analysis = values.get("deterministic_analysis")
+    if not analysis:
+        if values.get("errors"):
+            st.error("No se pudo completar el flujo: " + "; ".join(values["errors"]))
+        return
+
+    pricing = analysis["pricing"]
+    statistics = analysis["statistics"]
+    st.header("Resultado verificable")
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Mano de obra", f"{float(pricing['labor_cost']):.2f} €")
+    metric_cols[1].metric("Coste de producción", f"{float(pricing['production_cost']):.2f} €")
+    metric_cols[2].metric("Precio calculado", f"{float(pricing['calculated_price']):.2f} €")
+    metric_cols[3].metric("Margen", f"{float(pricing['margin_percent']):.2f} %")
+
+    left, right = st.columns([1.05, .95], gap="large")
+    with left:
+        st.subheader("Comparación comercial")
+        if statistics["valid_reference_count"]:
+            st.write(
+                f"{statistics['valid_reference_count']} referencias comparables en EUR. "
+                f"Media: **{float(statistics['mean']):.2f} €** · "
+                f"Mediana: **{float(statistics['median']):.2f} €**"
+            )
+        else:
+            st.warning("No existe una muestra monetariamente comparable en EUR.")
+        chart_path = values.get("chart_path")
+        if chart_path and Path(chart_path).exists():
+            st.image(chart_path, caption="Precio Python frente a referencias EUR")
+    with right:
+        st.subheader("Referencias y procedencia")
+        reference_result = values.get("references") or {}
+        for reference in reference_result.get("references", []):
+            checked = str(reference["checked_at"]).split("T")[0]
+            st.markdown(
+                f"**{reference['title']}**  \n"
+                f"{float(reference['price']):.2f} {reference['currency']} · "
+                f"{reference['source_name']} · {reference['provenance']} · {checked}  \n"
+                f"[Abrir fuente]({reference['source_url']})"
+            )
+        if reference_result.get("used_fallback"):
+            st.caption("Dataset local de respaldo; no es una búsqueda web en directo.")
+
+    st.subheader("Lectura de los agentes")
+    st.write(values.get("analyst_observations") or "Interpretación no disponible.")
+    assessment = values.get("commercial_assessment")
+    if assessment:
+        st.markdown(f"**Comparabilidad:** {assessment['comparability']}")
+        st.markdown(f"**Posición:** {assessment['market_position']}")
+        st.markdown(f"**Recomendación:** {assessment['recommendation']}")
+        for limitation in assessment["limitations"]:
+            st.caption(f"Limitación: {limitation}")
+
+    st.subheader("Observación visual")
+    visual = values.get("visual_analysis")
+    if visual:
+        st.write(f"**Tipo aparente:** {visual['apparent_type']}")
+        st.write("**Colores visibles:** " + ", ".join(visual["predominant_colors"]))
+        st.write("**Forma y detalles:** " + ", ".join(visual["shape_and_details"]))
+        st.caption(f"{visual['component']} · {visual['model']}")
+        for limitation in visual["limitations"]:
+            st.caption(f"Limitación visual: {limitation}")
+    elif values.get("visual_status") == "failed":
+        st.warning("El análisis visual no se completó; el resto del resultado sigue siendo válido.")
+    else:
+        st.caption("No se aportó fotografía.")
+
+    if values.get("errors"):
+        with st.expander("Incidencias técnicas"):
+            for error in values["errors"]:
+                st.write(error)
+
+    if execution.waiting_for_approval:
+        st.markdown(
+            '<div class="status-ok"><strong>Revisión automática superada.</strong> '
+            "Decide si deseas guardar el informe.</div>",
+            unsafe_allow_html=True,
+        )
+        approve_col, reject_col = st.columns(2)
+        if approve_col.button("Aprobar y generar informe", type="primary", use_container_width=True):
+            execution.resume(True)
+            st.rerun()
+        if reject_col.button("Rechazar informe", use_container_width=True):
+            execution.resume(False)
+            st.rerun()
+
+    values = execution.values
+    if values.get("report_status") == "saved":
+        st.success("Informe aprobado y guardado. El flujo no se ha vuelto a ejecutar.")
+        report_path = Path(values["report_path"])
+        chart_path = Path(values["chart_path"])
+        download_cols = st.columns(2)
+        download_cols[0].download_button(
+            "Descargar informe Markdown", report_path.read_bytes(),
+            file_name=report_path.name, mime="text/markdown", use_container_width=True,
+        )
+        download_cols[1].download_button(
+            "Descargar gráfico PNG", chart_path.read_bytes(),
+            file_name=chart_path.name, mime="image/png", use_container_width=True,
+        )
+    elif values.get("human_decision") == "rejected":
+        st.info("Informe rechazado: no se ha guardado ni repetido el análisis.")
+
+
 st.markdown(
-    '<div class="amigu-eyebrow">AMIGUPRECIO · PRECIO ARTESANO CON CRITERIO</div>',
+    '<div class="brand-line">AMIGUPRECIO · PRECIO ARTESANO CON TRAZABILIDAD</div>',
     unsafe_allow_html=True,
 )
-st.title("Calcula un precio que sostenga tu trabajo")
-st.caption("Calcula un precio rentable antes de compararlo con el mercado.")
+st.title("Pon precio a tu amigurumi con datos y criterio")
+st.markdown(
+    '<p class="intro">Calcula un precio sostenible, compáralo con productos terminados '
+    "en euros y obtén una lectura comercial asistida por tres agentes. Tú decides si el "
+    "informe se guarda.</p>", unsafe_allow_html=True,
+)
 
-with st.form("pricing_form"):
-    left, right = st.columns(2)
-    with left:
-        product_name = st.text_input("Nombre del amigurumi", placeholder="Luna")
-        product_type = st.text_input("Tipo", placeholder="Muñeca de ganchillo")
-        materials_cost = st.number_input("Materiales (€)", min_value=0.0, step=0.50)
-        hours_worked = st.number_input("Horas de trabajo", min_value=0.0, step=0.5)
-    with right:
-        hourly_rate = st.number_input("Precio deseado por hora (€)", min_value=0.0, step=0.50)
-        other_expenses = st.number_input("Otros gastos (€)", min_value=0.0, step=0.50)
-        margin_percent = st.number_input(
-            "Margen sobre ventas (%)", min_value=0.0, max_value=99.99, value=20.0, step=1.0
-        )
-        image = st.file_uploader(
-            "Fotografía (análisis disponible en la Fase 3)", type=["jpg", "jpeg", "png"]
-        )
-    submitted = st.form_submit_button("Calcular precio", use_container_width=True)
+execution: WorkflowExecution | None = st.session_state.get("workflow_execution")
+if execution is None:
+    with st.form("pricing_form"):
+        st.subheader("Datos del producto")
+        identity_left, identity_right = st.columns(2)
+        with identity_left:
+            product_name = st.text_input("Nombre del amigurumi", placeholder="Luna")
+        with identity_right:
+            product_type = st.text_input("Tipo o categoría", placeholder="Muñeca amigurumi")
 
-if image:
-    st.image(image, caption="Fotografía aportada", width=280)
+        cost_a, cost_b, cost_c = st.columns(3)
+        with cost_a:
+            materials_cost = st.number_input("Materiales (€)", min_value=0.0, step=0.50)
+            hours_worked = st.number_input("Horas de trabajo", min_value=0.0, step=0.5)
+        with cost_b:
+            hourly_rate = st.number_input("Precio por hora (€)", min_value=0.0, step=0.50)
+            other_expenses = st.number_input("Otros gastos (€)", min_value=0.0, step=0.50)
+        with cost_c:
+            margin_percent = st.number_input(
+                "Margen sobre ventas (%)", min_value=0.0, max_value=99.99,
+                value=20.0, step=1.0,
+            )
+            uploaded = st.file_uploader(
+                "Fotografía opcional", type=["jpg", "jpeg", "png", "webp"],
+                help="JPEG, PNG o WebP; máximo 5 MB.",
+            )
+        st.markdown(
+            '<p class="privacy-note">Si aportas una imagen, se valida y se elimina su EXIF '
+            "antes de enviarla una vez a Groq para analizar solo rasgos visibles. No se "
+            "aceptan URLs y la imagen no se guarda en disco.</p>", unsafe_allow_html=True,
+        )
+        submitted = st.form_submit_button("Analizar mi amigurumi", use_container_width=True)
 
-if submitted:
-    try:
-        data = PricingInput(
-            product_name=product_name,
-            product_type=product_type,
-            materials_cost=str(materials_cost),
-            hours_worked=str(hours_worked),
-            hourly_rate=str(hourly_rate),
-            other_expenses=str(other_expenses),
-            margin_percent=str(margin_percent),
-        )
-        result = calculate_price(data)
-    except ValidationError as exc:
-        errors = "; ".join(error["msg"] for error in exc.errors())
-        st.error(f"Revisa los datos: {errors}")
-    else:
-        st.subheader("Resultado del cálculo")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Mano de obra", f"{result.labor_cost:.2f} €")
-        col2.metric("Coste de producción", f"{result.production_cost:.2f} €")
-        col3.metric("Precio calculado", f"{result.calculated_price:.2f} €")
-        st.info(
-            "El precio calculado aplica margen sobre ventas. No incluye comisiones, impuestos "
-            "ni gastos que no se hayan introducido como otros gastos. Aún no es una comparación de mercado."
-        )
+    if submitted:
+        try:
+            product = PricingInput(
+                product_name=product_name, product_type=product_type,
+                materials_cost=str(materials_cost), hours_worked=str(hours_worked),
+                hourly_rate=str(hourly_rate), other_expenses=str(other_expenses),
+                margin_percent=str(margin_percent),
+            )
+            prepared = prepare_uploaded_image(uploaded.getvalue()) if uploaded else None
+            execution = WorkflowExecution.production(
+                product, product_type, OUTPUT_ROOT, prepared,
+            )
+            st.session_state.workflow_execution = execution
+            with st.status("Ejecutando el flujo real…", expanded=True) as status:
+                for stage in execution.start():
+                    st.write(STAGE_LABELS.get(stage, stage))
+                status.update(label="Flujo detenido para revisión", state="complete")
+        except (ValidationError, ImageValidationError) as exc:
+            st.error(f"Revisa los datos: {exc}")
+        except Exception as exc:  # noqa: BLE001 - frontera de UI, mensaje redactado
+            st.error(f"No se pudo iniciar el flujo ({type(exc).__name__}).")
+
+if execution is not None:
+    _render_results(execution)
+    if st.button("Nueva valoración"):
+        del st.session_state.workflow_execution
+        st.rerun()

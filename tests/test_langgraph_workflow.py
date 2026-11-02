@@ -15,6 +15,7 @@ from amiguprecio.langgraph_workflow import (
 from amiguprecio.models import PricingInput
 from amiguprecio.references import MarketReference, ReferenceSearchResult
 from amiguprecio.reporting import save_markdown_report
+from amiguprecio.vision import VisualAnalysis
 from amiguprecio.workflow import DeterministicAnalysis, run_deterministic_analysis
 
 
@@ -60,6 +61,7 @@ class FakeRuntime:
         analyst_outputs: list[str] | None = None,
         advisor_failures: int = 0,
         research_error: bool = False,
+        visual_analysis: VisualAnalysis | None = None,
     ) -> None:
         self.analyst_outputs = analyst_outputs or [
             (
@@ -69,14 +71,16 @@ class FakeRuntime:
         ]
         self.advisor_failures = advisor_failures
         self.research_error = research_error
+        self.visual_analysis = visual_analysis
         self.research_calls = 0
         self.calculation_calls = 0
         self.analyst_calls = 0
         self.advisor_calls = 0
         self.report_calls = 0
 
-    def research(self, query: str) -> ReferenceSearchResult:
+    def research(self, query: str, pricing_currency: str) -> ReferenceSearchResult:
         self.research_calls += 1
+        assert pricing_currency == "EUR"
         if self.research_error:
             raise RuntimeError("fallo MCP controlado")
         result = _references()
@@ -135,16 +139,28 @@ class FakeRuntime:
             analyze=self.analyze,
             advise=self.advise,
             save_report=self.save_report,
+            get_visual_analysis=(
+                (lambda: self.visual_analysis)
+                if self.visual_analysis is not None
+                else None
+            ),
         )
 
 
-def _start(runtime: FakeRuntime, tmp_path: Path, thread_id: str):
+def _start(
+    runtime: FakeRuntime,
+    tmp_path: Path,
+    thread_id: str,
+    *,
+    visual_requested: bool = False,
+):
     graph = build_amiguprecio_graph(runtime.services())
     state = initial_graph_state(
         _product(),
         "muñeca amigurumi terminada",
         tmp_path,
         report_path=tmp_path / "report.md",
+        visual_requested=visual_requested,
     )
     config = {"configurable": {"thread_id": thread_id}}
     interrupted = graph.invoke(state, config)
@@ -274,6 +290,34 @@ def test_approved_report_preserves_official_values_sources_and_limitations(tmp_p
     assert "https://example.com/verified-doll" in content
     assert "Tienda verificable" in content
     assert "No hay referencias comparables en EUR" in content
+
+
+def test_visual_result_is_checkpointed_and_included_in_approved_report(tmp_path) -> None:
+    visual = VisualAnalysis(
+        apparent_type="conejo de ganchillo",
+        predominant_colors=["crema", "coral", "verde"],
+        shape_and_details=["orejas largas", "bufanda"],
+        comparison_features=["figura animal"],
+        limitations=["no permite conocer el material exacto"],
+        model="qwen/qwen3.8-27b",
+    )
+    runtime = FakeRuntime(visual_analysis=visual)
+    graph, config, interrupted = _start(
+        runtime,
+        tmp_path,
+        "visual-report",
+        visual_requested=True,
+    )
+
+    assert interrupted["visual_status"] == "completed"
+    assert interrupted["visual_analysis"]["apparent_type"] == "conejo de ganchillo"
+
+    completed = graph.invoke(Command(resume={"approved": True}), config)
+    content = Path(completed["report_path"]).read_text(encoding="utf-8")
+
+    assert "## Análisis visual" in content
+    assert "qwen/qwen3.8-27b" in content
+    assert runtime.research_calls == runtime.calculation_calls == 1
     assert AmiguPrecioGraphState.__required_keys__ >= {
         "product",
         "references",

@@ -47,3 +47,42 @@ def test_absent_reference_returns_empty_list() -> None:
 
     assert result.references == []
     assert result.used_fallback is True
+
+
+def test_eur_references_are_prioritized_by_category_without_conversion() -> None:
+    result = search_references(
+        "muñeca amigurumi", live=False, currency="EUR", max_results=3
+    )
+
+    assert len(result.references) == 3
+    assert all(reference.currency == "EUR" for reference in result.references)
+    assert [reference.title for reference in result.references[:2]] == [
+        "Anne Claire Petit Bunny Crochet Doll",
+        "Anne Claire Petit Dog Crochet Doll",
+    ]
+
+
+def test_live_usd_results_fall_back_to_saved_eur(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usd = MarketReference(
+        title="Producto USD",
+        price="30.00",
+        currency="USD",
+        source_url="https://example.com/usd",
+        checked_at="2026-11-01T12:00:00+01:00",
+        source_name="Tienda USD",
+        provenance="live",
+        product_type="finished_product",
+    )
+    monkeypatch.setattr(
+        "amiguprecio.references.fetch_live_references",
+        lambda *args, **kwargs: [usd],
+    )
+
+    result = search_references("amigurumi", live=True, currency="EUR")
+
+    assert result.used_fallback is True
+    assert result.references
+    assert all(reference.currency == "EUR" for reference in result.references)
+    assert any("no devolvió referencias en EUR" in error for error in result.errors)

@@ -14,12 +14,14 @@ from langgraph.types import interrupt
 from amiguprecio.agents import (
     CommercialAssessment,
     MCPReferenceSearchTool,
+    VisionAnalysisTool,
     create_agents,
     ensure_assessment_uses_authoritative_numbers,
 )
 from amiguprecio.models import PricingInput
 from amiguprecio.references import ReferenceSearchResult
 from amiguprecio.reporting import render_markdown_report, save_markdown_report
+from amiguprecio.vision import PreparedImage, VisualAnalysis
 from amiguprecio.workflow import (
     DeterministicAnalysis,
     run_advisor_agent,
@@ -59,13 +61,17 @@ class AmiguPrecioGraphState(TypedDict):
     calculation_attempts: int
     analyst_attempts: int
     advisor_attempts: int
+    visual_requested: bool
+    visual_status: Literal["not_requested", "pending", "completed", "failed"]
+    visual_analysis: dict[str, object] | None
+    visual_error: str | None
 
 
 @dataclass(frozen=True)
 class WorkflowServices:
     """Fronteras sustituibles para producción y pruebas deterministas."""
 
-    research: Callable[[str], ReferenceSearchResult]
+    research: Callable[[str, str], ReferenceSearchResult]
     calculate: Callable[
         [PricingInput, list, Path, str], DeterministicAnalysis
     ]
@@ -74,20 +80,29 @@ class WorkflowServices:
         [DeterministicAnalysis, str, str], CommercialAssessment
     ]
     save_report: Callable[[Path, str], Path] = save_markdown_report
+    get_visual_analysis: Callable[[], VisualAnalysis | None] | None = None
+    get_visual_error: Callable[[], str | None] | None = None
 
 
-def create_production_services(output_dir: Path) -> WorkflowServices:
+def create_production_services(
+    output_dir: Path, prepared_image: PreparedImage | None = None
+) -> WorkflowServices:
     """Conecta el grafo con los tres agentes y el cálculo ya existentes."""
 
     research_tool = MCPReferenceSearchTool()
-    researcher, analyst, advisor = create_agents(research_tool=research_tool)
+    vision_tool = VisionAnalysisTool(prepared_image) if prepared_image else None
+    researcher, analyst, advisor = create_agents(
+        research_tool=research_tool,
+        vision_tool=vision_tool,
+    )
     crew_log = str(output_dir / "langgraph-crewai.json")
 
-    def research(query: str) -> ReferenceSearchResult:
+    def research(query: str, pricing_currency: str) -> ReferenceSearchResult:
         result, _ = run_research_agent(
             researcher,
             research_tool,
             query,
+            pricing_currency=pricing_currency,
             output_log_file=crew_log,
         )
         return result
@@ -125,6 +140,11 @@ def create_production_services(output_dir: Path) -> WorkflowServices:
             observations,
             output_log_file=crew_log,
             pricing_currency=pricing_currency,
+            use_vision=(
+                vision_tool is not None
+                and vision_tool.last_result is None
+                and vision_tool.last_error is None
+            ),
         )
         return assessment
 
@@ -133,6 +153,12 @@ def create_production_services(output_dir: Path) -> WorkflowServices:
         calculate=calculate,
         analyze=analyze,
         advise=advise,
+        get_visual_analysis=(
+            (lambda: vision_tool.last_result) if vision_tool is not None else None
+        ),
+        get_visual_error=(
+            (lambda: vision_tool.last_error) if vision_tool is not None else None
+        ),
     )
 
 
@@ -143,6 +169,7 @@ def initial_graph_state(
     *,
     pricing_currency: str = "EUR",
     report_path: Path | None = None,
+    visual_requested: bool = False,
 ) -> AmiguPrecioGraphState:
     """Crea un estado inicial explícito y listo para checkpoint."""
 
@@ -169,6 +196,10 @@ def initial_graph_state(
         calculation_attempts=0,
         analyst_attempts=0,
         advisor_attempts=0,
+        visual_requested=visual_requested,
+        visual_status="pending" if visual_requested else "not_requested",
+        visual_analysis=None,
+        visual_error=None,
     )
 
 
@@ -208,7 +239,9 @@ def build_amiguprecio_graph(
         if state["references"] is not None:
             return {}
         try:
-            references = services.research(state["query"])
+            references = services.research(
+                state["query"], state["pricing_currency"]
+            )
         except Exception as exc:  # noqa: BLE001 - frontera CrewAI/MCP
             return {
                 "errors": _with_error(state, "investigación", exc),
@@ -291,10 +324,33 @@ def build_amiguprecio_graph(
                 "errors": _with_error(state, "asesor", exc),
                 "advisor_attempts": state["advisor_attempts"] + 1,
             }
-        return {
+        result: dict[str, object] = {
             "commercial_assessment": assessment.model_dump(mode="json"),
             "advisor_attempts": state["advisor_attempts"] + 1,
         }
+        if state["visual_requested"]:
+            visual = (
+                services.get_visual_analysis()
+                if services.get_visual_analysis is not None
+                else None
+            )
+            visual_error = (
+                services.get_visual_error()
+                if services.get_visual_error is not None
+                else "La herramienta visual no está disponible"
+            )
+            if visual is not None:
+                result.update(
+                    visual_status="completed",
+                    visual_analysis=visual.model_dump(mode="json"),
+                    visual_error=None,
+                )
+            else:
+                result.update(
+                    visual_status="failed",
+                    visual_error=visual_error or "El asesor no ejecutó la herramienta visual",
+                )
+        return result
 
     def review_node(state: AmiguPrecioGraphState) -> dict[str, object]:
         references_data = state["references"]
@@ -401,6 +457,12 @@ def build_amiguprecio_graph(
             observations,
             assessment,
             pricing_currency=state["pricing_currency"],
+            visual_analysis=(
+                VisualAnalysis.model_validate(state["visual_analysis"])
+                if state["visual_analysis"] is not None
+                else None
+            ),
+            visual_error=state["visual_error"],
         )
         try:
             path = services.save_report(

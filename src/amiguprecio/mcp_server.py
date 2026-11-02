@@ -8,10 +8,20 @@ mcp = FastMCP("amiguprecio-market", instructions="Devuelve solo precios y fuente
 
 
 @mcp.tool()
-def search_market_references(query: str, max_results: int = 3, live: bool = True) -> dict:
+def search_market_references(
+    query: str,
+    max_results: int = 3,
+    live: bool = True,
+    currency: str | None = None,
+) -> dict:
     """Busca hasta tres referencias de amigurumis y declara su procedencia."""
 
-    result = search_references(query=query, max_results=max_results, live=live)
+    result = search_references(
+        query=query,
+        max_results=max_results,
+        live=live,
+        currency=currency,
+    )
     return result.model_dump(mode="json")
 
 

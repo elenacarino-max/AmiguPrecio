@@ -119,6 +119,7 @@ def run_research_agent(
     research_tool: MCPReferenceSearchTool,
     query: str,
     *,
+    pricing_currency: str = "EUR",
     output_log_file: str | None = None,
 ) -> tuple[ReferenceSearchResult, dict[str, object]]:
     """Ejecuta una única investigación CrewAI y conserva el resultado MCP tipado."""
@@ -126,8 +127,8 @@ def run_research_agent(
     task = Task(
         description=(
             "Usa search_market_references exactamente una vez con query={query}, "
-            "max_results=3 y live=false. Devuelve el resultado de la herramienta sin "
-            "reconstruir precios ni fuentes."
+            "max_results=3, live=false y currency={pricing_currency}. Devuelve el resultado "
+            "de la herramienta sin reconstruir precios, monedas ni fuentes."
         ),
         expected_output="Resultado JSON exacto del servidor MCP.",
         agent=researcher,
@@ -138,7 +139,7 @@ def run_research_agent(
         process=Process.sequential,
         output_log_file=output_log_file,
         verbose=False,
-    ).kickoff(inputs={"query": query})
+    ).kickoff(inputs={"query": query, "pricing_currency": pricing_currency})
     if research_tool.last_result is None:
         raise AgentOutputError("El investigador no ejecutó la herramienta MCP")
     return research_tool.last_result, _usage_dict(output)
@@ -204,6 +205,7 @@ def run_advisor_agent(
     *,
     output_log_file: str | None = None,
     pricing_currency: str = "EUR",
+    use_vision: bool = False,
 ) -> tuple[CommercialAssessment, dict[str, object]]:
     """Ejecuta solo la valoración CrewAI y valida localmente su JSON."""
 
@@ -214,12 +216,22 @@ def run_advisor_agent(
         },
         ensure_ascii=False,
     )
+    vision_instruction = (
+        " Usa analyze_uploaded_amigurumi_image exactamente una vez. Limita las "
+        "observaciones visuales a su resultado; si falla, continúa con los datos no "
+        "visuales e incluye esa limitación. Las limitaciones visuales significan solo "
+        "que un dato no puede inferirse de la foto: no declares desconocido un coste, "
+        "precio o margen que sí figure en el resultado oficial de Python."
+        if use_vision
+        else ""
+    )
     task = Task(
         description=(
             f"Valora exclusivamente estos datos: {payload}. No recalcules ni sustituyas "
             "cifras. Devuelve solo JSON válido con comparability, market_position, "
             "recommendation y limitations. limitations debe ser siempre un array JSON "
             "de cadenas, incluso cuando solo exista una limitación."
+            f"{vision_instruction}"
         ),
         expected_output="JSON textual compatible con CommercialAssessment.",
         agent=advisor,
@@ -257,6 +269,7 @@ def run_hybrid_workflow(
             researcher,
             research_tool,
             query,
+            pricing_currency="EUR",
             output_log_file=crew_log,
         )
     except Exception as exc:  # noqa: BLE001 - frontera externa redactada

@@ -7,6 +7,7 @@ from pathlib import Path
 from amiguprecio.agents import CommercialAssessment
 from amiguprecio.models import PricingInput
 from amiguprecio.references import ReferenceSearchResult
+from amiguprecio.vision import VisualAnalysis
 from amiguprecio.workflow import DeterministicAnalysis
 
 
@@ -24,6 +25,8 @@ def render_markdown_report(
     assessment: CommercialAssessment,
     *,
     pricing_currency: str = "EUR",
+    visual_analysis: VisualAnalysis | None = None,
+    visual_error: str | None = None,
 ) -> str:
     """Renderiza el informe usando Python como única fuente monetaria oficial."""
 
@@ -88,6 +91,23 @@ def render_markdown_report(
                 f"- Mediana: {analysis.statistics.median:.2f} {pricing_currency}",
             ]
         )
+
+    lines.extend(["", "## Análisis visual", ""])
+    if visual_analysis is not None:
+        lines.extend(
+            [
+                f"- Tipo aparente: {visual_analysis.apparent_type}",
+                f"- Colores predominantes: {', '.join(visual_analysis.predominant_colors)}",
+                f"- Forma y detalles: {', '.join(visual_analysis.shape_and_details)}",
+                f"- Rasgos comparables: {', '.join(visual_analysis.comparison_features)}",
+                f"- Componente: {visual_analysis.component} ({visual_analysis.model})",
+            ]
+        )
+        lines.extend(f"- Limitación visual: {item}" for item in visual_analysis.limitations)
+    elif visual_error:
+        lines.append(f"Análisis visual no completado: {visual_error}")
+    else:
+        lines.append("No se aportó una fotografía para análisis visual.")
 
     lines.extend(
         [

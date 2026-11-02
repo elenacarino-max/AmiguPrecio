@@ -4,10 +4,9 @@ MVP para que artesanas y artesanos calculen un precio rentable para sus amigurum
 
 ## Estado
 
-**Fase 3 funcional:** cálculo determinista, interfaz Streamlit inicial, tres agentes
-CrewAI, servidor MCP local, análisis con Pandas/Matplotlib y un `StateGraph` con
-revisión limitada, interrupción humana, reanudación e informe Markdown. La visión
-y la integración de imágenes todavía no están implementadas.
+**Fase 4 funcional:** cálculo determinista, interfaz Streamlit completa, tres agentes
+CrewAI, servidor MCP local, comparación con referencias EUR, visión mediante Groq
+y un `StateGraph` con revisión limitada, interrupción humana, reanudación y descargas.
 
 La fórmula implementada es:
 
@@ -63,7 +62,8 @@ Copy-Item .env.example .env
 uv sync --extra dev
 ```
 
-No añadas claves a Git. La Fase 1 no consume ninguna API ni realiza llamadas de pago.
+No añadas claves a Git. La interfaz completa consume Groq al ejecutar los agentes y,
+si se aporta una fotografía, realiza además una única llamada visual.
 
 ## Ejecutar
 
@@ -83,8 +83,8 @@ uv run ruff check .
 1. **Fase 1:** calculadora validada e interfaz base. Completada.
 2. **Fase 2:** tres agentes CrewAI y herramientas; servidor y cliente MCP reales. Completada.
 3. **Fase 3:** flujo híbrido y LangGraph con revisión limitada, errores,
-   pausa/reanudación e informe. Completada salvo visión.
-4. **Fase 4:** visión, integración de imagen y ajustes finales de interfaz.
+   pausa/reanudación e informe. Completada.
+4. **Fase 4:** visión, referencias EUR e interfaz completa. Completada.
 5. **Fase 5:** auditoría contra el briefing, documentación y guion de demo.
 
 ## Fuente de requisitos
@@ -98,7 +98,7 @@ comercial. El investigador recibe `search_market_references`, que usa el cliente
 servidor MCP reales; el cálculo Python se ejecuta fuera del LLM; y la salida del
 asesor se valida localmente mediante `CommercialAssessment`.
 
-La fuente en directo es el catálogo JSON público de SweetLavenderCo. La consulta tiene un timeout, un máximo de tres resultados y conserva URL, precio, moneda, fecha y procedencia `live`. Si falla o queda vacía, se consulta `data/amigurumis_referencias.csv` y cada registro se marca como `saved`. El CSV contiene 12 productos terminados verificados en tres tiendas; no contiene patrones, kits ni precios ambiguos.
+La fuente en directo es el catálogo JSON público de SweetLavenderCo. La consulta tiene un timeout, un máximo de tres resultados y conserva URL, precio, moneda, fecha y procedencia `live`. Si falla o queda vacía, se consulta `data/amigurumis_referencias.csv` y cada registro se marca como `saved`. El CSV contiene 17 productos terminados verificados, incluidos cinco en EUR. Conserva también referencias en USD, GBP e INR, sin mezclar ni convertir monedas. No contiene patrones, kits ni precios ambiguos.
 
 ```powershell
 # Demostración MCP reproducible, sin LLM ni llamadas de pago
@@ -153,4 +153,22 @@ uv run python examples/phase3_langgraph.py
 Las pruebas de LangGraph usan sustitutos deterministas. Demuestran el flujo, los
 errores, el reintento acotado y la pausa/reanudación, pero no se presentan como
 ejecuciones reales de IA.
+
+### Visión y privacidad
+
+La fotografía es opcional. Se admiten JPEG, PNG y WebP de hasta 5 MB. La aplicación
+comprueba que el archivo contiene píxeles reales, limita sus dimensiones, corrige la
+orientación y lo recodifica sin EXIF. No acepta URLs ni persiste la imagen en disco.
+Los bytes limpios se envían una vez como `data:` URL al modelo configurado mediante
+`GROQ_VISION_MODEL` (por defecto `qwen/qwen3.8-27b`).
+
+El modelo solo describe tipo aparente, colores, forma, detalles y rasgos comparables.
+No puede deducir tamaño exacto, material, horas, coste, calidad o demanda. Un fallo
+visual se registra como limitación y no invalida los cálculos o referencias.
+
+La sesión conserva en memoria el grafo, el checkpointer, el `thread_id`, resultados y
+decisión. Aprobar o rechazar usa `Command(resume=...)` sobre el mismo checkpoint, sin
+repetir MCP, Python ni agentes. Al usar `InMemorySaver`, reiniciar el proceso de
+Streamlit pierde las sesiones pendientes; los informes ya aprobados permanecen en
+`output/streamlit/`.
 

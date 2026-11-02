@@ -21,7 +21,9 @@ def pricing_result():
 
 def test_statistics_use_valid_references() -> None:
     stats = calculate_market_statistics(
-        pricing_result(), load_saved_references("amigurumi"), calculated_currency="USD"
+        pricing_result(),
+        load_saved_references("amigurumi", currency="USD"),
+        calculated_currency="USD",
     )
 
     assert stats.valid_reference_count == 3

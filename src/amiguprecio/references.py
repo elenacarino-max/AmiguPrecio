@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import unicodedata
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -47,36 +48,60 @@ class ReferenceSearchResult(BaseModel):
 
 
 def load_saved_references(
-    query: str, max_results: int = 3, catalog_path: Path = DEFAULT_CATALOG
+    query: str,
+    max_results: int = 3,
+    catalog_path: Path = DEFAULT_CATALOG,
+    currency: str | None = None,
 ) -> list[MarketReference]:
     """Busca en el catálogo guardado; nunca lo presenta como consulta en directo."""
 
-    terms = {term.casefold() for term in query.split() if term.strip()}
-    matches: list[MarketReference] = []
+    def normalized(value: str) -> str:
+        decomposed = unicodedata.normalize("NFKD", value.casefold())
+        return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+    alias_groups = {
+        "muneca": {"muneca", "doll"},
+        "peluche": {"peluche", "plush", "lovie", "comforter", "soft toy"},
+        "animal": {"animal"},
+        "amigurumi": {"amigurumi", "crochet"},
+    }
+    raw_terms = {normalized(term) for term in query.split() if term.strip()}
+    terms: set[str] = set()
+    for term in raw_terms:
+        terms.update(alias_groups.get(term, {term}))
+    requested_currency = currency.upper() if currency else None
+    ranked: list[tuple[int, int, MarketReference]] = []
     with catalog_path.open(encoding="utf-8", newline="") as stream:
         records = csv.DictReader(stream)
-        for record in records:
-            searchable = " ".join(
-                [record["name"], record["category"], record["product_type"]]
-            ).casefold()
-            if not terms or any(term in searchable for term in terms):
-                size = record["size"].strip() or None
-                matches.append(
-                    MarketReference(
-                        title=record["name"],
-                        price=record["price"],
-                        currency=record["currency"],
-                        features=[value for value in [record["category"], size] if value],
-                        source_url=record["url"],
-                        checked_at=record["checked_at"],
-                        source_name=record["store"],
-                        provenance="saved",
-                        category=record["category"],
-                        size=size,
-                        product_type=record["product_type"],
-                    )
+        for position, record in enumerate(records):
+            if requested_currency and record["currency"] != requested_currency:
+                continue
+            if record["product_type"] != "finished_product":
+                continue
+            searchable = normalized(
+                " ".join(
+                    [record["name"], record["category"], record["product_type"]]
                 )
-    return matches[: min(max_results, 3)]
+            )
+            score = sum(1 for term in terms if term in searchable)
+            size = record["size"].strip() or None
+            reference = MarketReference(
+                title=record["name"],
+                price=record["price"],
+                currency=record["currency"],
+                features=[value for value in [record["category"], size] if value],
+                source_url=record["url"],
+                checked_at=record["checked_at"],
+                source_name=record["store"],
+                provenance="saved",
+                category=record["category"],
+                size=size,
+                product_type=record["product_type"],
+            )
+            if score or not terms:
+                ranked.append((score, position, reference))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in ranked[: min(max_results, 3)]]
 
 
 def fetch_live_references(
@@ -125,22 +150,50 @@ def fetch_live_references(
     return references
 
 
-def search_references(query: str, max_results: int = 3, live: bool = True) -> ReferenceSearchResult:
+def search_references(
+    query: str,
+    max_results: int = 3,
+    live: bool = True,
+    currency: str | None = None,
+) -> ReferenceSearchResult:
     """Busca en directo y usa datos guardados solo si la consulta falla o queda vacía."""
 
     errors: list[str] = []
+    limit = min(max(max_results, 1), 3)
+    requested_currency = currency.upper() if currency else None
+    live_references: list[MarketReference] = []
     if live:
         try:
-            references = fetch_live_references(query, max_results=max_results)
-            if references:
-                return ReferenceSearchResult(query=query, references=references)
+            live_references = fetch_live_references(query, max_results=limit)
+            compatible_live = [
+                reference
+                for reference in live_references
+                if requested_currency is None or reference.currency == requested_currency
+            ]
+            if compatible_live and len(compatible_live) == limit:
+                return ReferenceSearchResult(query=query, references=compatible_live)
+            if live_references and requested_currency and not compatible_live:
+                errors.append(
+                    f"La fuente en directo no devolvió referencias en {requested_currency}."
+                )
             errors.append("La fuente en directo no devolvió referencias comparables.")
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             errors.append(f"Fuente en directo inaccesible: {type(exc).__name__}: {exc}")
-    saved = load_saved_references(query, max_results=max_results)
+    saved = load_saved_references(
+        query,
+        max_results=limit,
+        currency=requested_currency,
+    )
+    if saved:
+        return ReferenceSearchResult(
+            query=query,
+            references=saved,
+            errors=errors,
+            used_fallback=True,
+        )
     return ReferenceSearchResult(
         query=query,
-        references=saved,
+        references=live_references[:limit],
         errors=errors,
-        used_fallback=True,
+        used_fallback=not live,
     )

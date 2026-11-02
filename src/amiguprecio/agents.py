@@ -28,6 +28,12 @@ from amiguprecio.mcp_client import search_references_mcp_sync
 from amiguprecio.models import PricingInput
 from amiguprecio.pricing import calculate_price
 from amiguprecio.references import MarketReference, ReferenceSearchResult
+from amiguprecio.vision import (
+    PreparedImage,
+    VisionProviderError,
+    VisualAnalysis,
+    analyze_image_with_groq,
+)
 
 
 def _parse_finite_decimal(value: str, *, positive: bool = False) -> Decimal:
@@ -171,6 +177,7 @@ class MCPReferenceSearchInput(BaseModel):
     query: str
     max_results: int = Field(default=3, ge=1, le=3)
     live: bool = False
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
 
 
 class MCPReferenceSearchTool(BaseTool):
@@ -195,8 +202,54 @@ class MCPReferenceSearchTool(BaseTool):
             query=tool_input.query,
             max_results=tool_input.max_results,
             live=tool_input.live,
+            currency=tool_input.currency,
         )
         return self._last_result.model_dump(mode="json")
+
+
+class VisionAnalysisInput(BaseModel):
+    action: Literal["analyze"] = "analyze"
+
+
+class VisionAnalysisTool(BaseTool):
+    """Herramienta visual acotada al archivo validado de esta ejecución."""
+
+    name: str = "analyze_uploaded_amigurumi_image"
+    description: str = (
+        "Analiza una vez la fotografía ya validada y devuelve solo rasgos visibles y "
+        "limitaciones. No estima costes, tamaño, materiales, calidad o demanda."
+    )
+    args_schema: type[BaseModel] = VisionAnalysisInput
+    max_usage_count: int | None = 1
+    _image: PreparedImage = PrivateAttr()
+    _last_result: VisualAnalysis | None = PrivateAttr(default=None)
+    _last_error: str | None = PrivateAttr(default=None)
+
+    def __init__(self, image: PreparedImage, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._image = image
+
+    @property
+    def last_result(self) -> VisualAnalysis | None:
+        return self._last_result
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    def _run(self, **kwargs: object) -> dict[str, object]:
+        VisionAnalysisInput.model_validate(kwargs)
+        try:
+            call = analyze_image_with_groq(self._image)
+        except VisionProviderError as exc:
+            self._last_error = str(exc)
+            return {"status": "failed", "error": self._last_error}
+        self._last_result = call.analysis
+        self._last_error = None
+        return {
+            "status": "completed",
+            "analysis": call.analysis.model_dump(mode="json"),
+        }
 
 
 class CommercialAssessment(BaseModel):
@@ -351,6 +404,7 @@ def create_agents(
     research_tool: MCPReferenceSearchTool | None = None,
     analyst_llm: LLM | None = None,
     advisor_llm: LLM | None = None,
+    vision_tool: VisionAnalysisTool | None = None,
 ) -> tuple[Agent, Agent, Agent]:
     researcher_llm = llm or create_llm()
     analyst_llm = analyst_llm or (
@@ -400,10 +454,10 @@ def create_agents(
         role="Asesor comercial de producto artesanal",
         goal="Evaluar comparabilidad y redactar una valoración estructurada sin inventar demanda ni ventas.",
         backstory="Asesor escéptico que explicita limitaciones y evita conclusiones cuando faltan datos.",
-        tools=[],
+        tools=[vision_tool] if vision_tool else [],
         llm=advisor_llm,
         allow_delegation=False,
-        max_iter=1,
+        max_iter=2 if vision_tool else 1,
         max_retry_limit=0,
         verbose=False,
     )

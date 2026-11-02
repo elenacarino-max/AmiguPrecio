@@ -103,7 +103,12 @@ def test_research_tool_preserves_typed_mcp_result(monkeypatch) -> None:
     expected = ReferenceSearchResult(query="muñeca", references=[reference])
 
     def fake_mcp_search(**kwargs: object) -> ReferenceSearchResult:
-        assert kwargs == {"query": "muñeca", "max_results": 3, "live": False}
+        assert kwargs == {
+            "query": "muñeca",
+            "max_results": 3,
+            "live": False,
+            "currency": None,
+        }
         return expected
 
     monkeypatch.setattr(
