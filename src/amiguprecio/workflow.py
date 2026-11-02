@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from crewai import LLM, Agent, Crew, Process, Task
@@ -17,7 +18,11 @@ from amiguprecio.agents import (
     ensure_text_uses_authoritative_numbers,
     validate_commercial_assessment,
 )
-from amiguprecio.analysis import MarketStatistics
+from amiguprecio.analysis import (
+    CommercialComparability,
+    MarketStatistics,
+    evaluate_commercial_comparability,
+)
 from amiguprecio.models import PricingInput, PricingResult
 from amiguprecio.references import MarketReference, ReferenceSearchResult
 
@@ -27,6 +32,7 @@ class DeterministicAnalysis(BaseModel):
 
     pricing: PricingResult
     statistics: MarketStatistics
+    commercial_comparability: CommercialComparability
     references: list[MarketReference]
     chart_path: str
 
@@ -81,6 +87,11 @@ def run_deterministic_analysis(
     return DeterministicAnalysis(
         pricing=PricingResult.model_validate(raw_result["pricing"]),
         statistics=MarketStatistics.model_validate(raw_result["statistics"]),
+        commercial_comparability=evaluate_commercial_comparability(
+            pricing_input,
+            references,
+            pricing_currency,
+        ),
         references=references,
         chart_path=raw_result["chart_path"],
     )
@@ -98,7 +109,103 @@ def validate_analyst_observations(
         observations,
         deterministic_analysis.model_dump(mode="json"),
     )
+    comparison = deterministic_analysis.commercial_comparability
+    if (
+        comparison.sample_is_heterogeneous
+        or comparison.directly_comparable_count < 3
+        or _UNSUPPORTED_COMMERCIAL_CLAIMS.search(observations)
+    ):
+        pricing = deterministic_analysis.pricing
+        statistics = deterministic_analysis.statistics
+        sample_text = (
+            f" La media de la muestra monetaria es {statistics.mean:.2f} EUR, pero no "
+            "representa una media de productos directamente comparables."
+            if statistics.mean is not None
+            else " No existe una muestra en EUR para calcular una media."
+        )
+        return (
+            f"Python fija {pricing.production_cost:.2f} EUR de coste y "
+            f"{pricing.calculated_price:.2f} EUR de precio con un margen objetivo del "
+            f"{pricing.margin_percent:.2f} %.{sample_text} "
+            "No es posible determinar el posicionamiento de mercado con estas referencias."
+        )
     return observations
+
+
+_UNSUPPORTED_COMMERCIAL_CLAIMS = re.compile(
+    r"\b(premium|lujo|alta\s+gama)\b|"
+    r"margen.{0,35}posicion|posicion.{0,35}margen|"
+    r"(?:ventas|demanda).{0,25}(?:prueba|demuestra)|"
+    r"(?:prueba|demuestra).{0,25}(?:ventas|demanda)|"
+    r"\b(?:alta|fuerte)\s+demanda\b|demanda\s+(?:alta|fuerte|demostrada)|"
+    r"ventas\s+(?:altas|demostradas|garantizadas)|"
+    r"mantener\s+(?:el\s+)?precio|"
+    r"no\s+(?:hay|existen)\s+discrepancias",
+    flags=re.IGNORECASE,
+)
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = " ".join(value.split()).strip()
+        key = cleaned.casefold().rstrip(".")
+        if cleaned and key not in seen:
+            seen.add(key)
+            result.append(cleaned)
+    return result
+
+
+def enforce_supported_commercial_assessment(
+    assessment: CommercialAssessment,
+    analysis: DeterministicAnalysis,
+) -> CommercialAssessment:
+    """Sustituye afirmaciones no respaldadas sin realizar otra llamada al LLM."""
+
+    comparison = analysis.commercial_comparability
+    narrative = (
+        f"{assessment.comparability} {assessment.market_position} "
+        f"{assessment.recommendation}"
+    )
+    sufficient = (
+        comparison.directly_comparable_count >= 3
+        and not comparison.sample_is_heterogeneous
+    )
+    unsupported_claim = bool(_UNSUPPORTED_COMMERCIAL_CLAIMS.search(narrative))
+    if sufficient and not unsupported_claim:
+        return assessment.model_copy(
+            update={
+                "limitations": _ordered_unique(
+                    [
+                        *assessment.limitations,
+                        "Los precios anunciados no prueban ventas ni demanda.",
+                        "El margen objetivo no determina el posicionamiento de mercado.",
+                    ]
+                )
+            }
+        )
+
+    limitations = _ordered_unique(
+        [
+            *comparison.limitations,
+            *assessment.limitations,
+            "Los precios anunciados no prueban ventas ni demanda.",
+            "El margen objetivo no determina el posicionamiento de mercado.",
+        ]
+    )
+    return CommercialAssessment(
+        comparability=(
+            "Insuficiente: las referencias comparten moneda, pero no existe evidencia "
+            "suficiente de equivalencia por tipo, tamaño y características."
+        ),
+        market_position="No es posible determinar el posicionamiento de mercado con estas referencias.",
+        recommendation=(
+            "Usar el precio calculado como base de costes y reunir referencias más "
+            "equivalentes antes de tomar una decisión comercial."
+        ),
+        limitations=limitations,
+    )
 
 
 def _usage_dict(crew_output: object) -> dict[str, object]:
@@ -155,14 +262,17 @@ def analyst_payload(
         "calculated_price": str(analysis.pricing.calculated_price),
         "margin_percent": str(analysis.pricing.margin_percent),
         "pricing_currency": pricing_currency,
-        "valid_reference_count": analysis.statistics.valid_reference_count,
+        "currency_sample_count": analysis.statistics.valid_reference_count,
         "reference_currencies": sorted(
             {reference.currency for reference in analysis.references}
         ),
-        "market_mean": (
+        "currency_sample_mean": (
             str(analysis.statistics.mean)
             if analysis.statistics.mean is not None
             else None
+        ),
+        "commercial_comparability": analysis.commercial_comparability.model_dump(
+            mode="json"
         ),
     }
 
@@ -182,8 +292,9 @@ def run_analyst_agent(
     task = Task(
         description=(
             f"Interpreta estos resultados oficiales de Python: {payload}. "
-            "No recalcules ni cambies cifras. Si no hay referencias comparables, dilo "
-            "expresamente y no inventes una media. Responde en menos de 80 palabras."
+            "No recalcules ni cambies cifras. Distingue muestra por moneda de productos "
+            "directamente comparables. No infieras posicionamiento, ventas o demanda, ni "
+            "relaciones el margen con el posicionamiento. Responde en menos de 80 palabras."
         ),
         expected_output="Interpretación comercial breve basada únicamente en Python.",
         agent=analyst,
@@ -228,9 +339,14 @@ def run_advisor_agent(
     task = Task(
         description=(
             f"Valora exclusivamente estos datos: {payload}. No recalcules ni sustituyas "
-            "cifras. Devuelve solo JSON válido con comparability, market_position, "
-            "recommendation y limitations. limitations debe ser siempre un array JSON "
-            "de cadenas, incluso cuando solo exista una limitación."
+            "cifras. Compartir moneda no implica comparabilidad por tipo, tamaño o "
+            "características. Una diferencia frente a una media pequeña no demuestra un "
+            "posicionamiento premium. El margen objetivo no determina posicionamiento. "
+            "Los precios anunciados no prueban ventas ni demanda. No recomiendes mantener "
+            "un precio actual que la persona no haya aportado. Si la comparabilidad es "
+            "insuficiente, indica que no puede determinarse el posicionamiento. Devuelve "
+            "solo JSON válido con comparability, market_position, recommendation y "
+            "limitations; limitations debe ser siempre un array JSON de cadenas."
             f"{vision_instruction}"
         ),
         expected_output="JSON textual compatible con CommercialAssessment.",
@@ -247,7 +363,7 @@ def run_advisor_agent(
     ensure_assessment_uses_authoritative_numbers(
         assessment, analysis.model_dump(mode="json")
     )
-    return assessment, _usage_dict(output)
+    return enforce_supported_commercial_assessment(assessment, analysis), _usage_dict(output)
 
 
 def run_hybrid_workflow(

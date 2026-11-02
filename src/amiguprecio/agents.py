@@ -122,7 +122,7 @@ class PricingToolInput(BaseModel):
 class PricingAnalysisTool(BaseTool):
     name: str = "calculate_and_compare_prices"
     description: str = (
-        "Calcula costes con la fórmula validada y estadísticas sobre referencias válidas."
+        "Calcula costes con la fórmula validada y estadísticas de la muestra por moneda."
     )
     args_schema: type[BaseModel] = PricingToolInput
     result_as_answer: bool = True
@@ -481,7 +481,7 @@ def create_crew(llm: LLM | None = None, output_log_file: str | None = None) -> C
             "Debes usar calculate_and_compare_prices exactamente una vez con {pricing_data} y las "
             "referencias obtenidas por el investigador. Para cada referencia pasa exclusivamente "
             "source_url, price, currency, checked_at y provenance. Compara solo referencias con la "
-            "misma moneda."
+            "misma moneda y no presentes esa coincidencia monetaria como equivalencia comercial."
         ),
         expected_output="Cálculo y estadísticas numéricas reproducibles.",
         agent=analyst,
@@ -491,6 +491,9 @@ def create_crew(llm: LLM | None = None, output_log_file: str | None = None) -> C
         description=(
             "Evalúa comparabilidad, posición y limitaciones usando únicamente los resultados "
             "anteriores. No recalcules ni sustituyas cifras de Python y evita repetir importes. "
+            "No declares posicionamiento premium por superar una media pequeña, no relaciones "
+            "margen con posicionamiento, no infieras ventas o demanda y no recomiendes mantener "
+            "un precio actual no aportado. "
             "Devuelve solamente JSON válido, sin Markdown, con las claves comparability, "
             "market_position, recommendation y limitations."
         ),

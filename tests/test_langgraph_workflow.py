@@ -286,7 +286,7 @@ def test_approved_report_preserves_official_values_sources_and_limitations(tmp_p
 
     assert "Coste de producción: 65.00 EUR" in content
     assert "Precio calculado: 81.25 EUR" in content
-    assert "No existe una muestra válida comparable en EUR" in content
+    assert "No existe una muestra de referencias en EUR" in content
     assert "https://example.com/verified-doll" in content
     assert "Tienda verificable" in content
     assert "No hay referencias comparables en EUR" in content
@@ -317,6 +317,7 @@ def test_visual_result_is_checkpointed_and_included_in_approved_report(tmp_path)
 
     assert "## Análisis visual" in content
     assert "qwen/qwen3.8-27b" in content
+    assert content.count("no permite conocer el material exacto") == 1
     assert runtime.research_calls == runtime.calculation_calls == 1
     assert AmiguPrecioGraphState.__required_keys__ >= {
         "product",

@@ -66,8 +66,8 @@ procedencia `saved` al convertirse a `MarketReference`.
 | 13 | Strawberry Reversible Crochet Toy | 30,90 EUR | crochet plush toy / 15 × 9 × 9 cm | [MyUM](https://myum.fr/en/products/la-fraise-jouet-reversible-en-coton-bio); terminado, pero débilmente comparable con una muñeca |
 | 14 | Crab Crochet Lovie | 22,90 EUR | crochet animal comforter / 30 × 25 × 4 cm | [MyUM](https://myum.fr/en/products/doudou-crabe-en-crochet-100-coton-bio); no es una muñeca ni un amigurumi equivalente |
 | 15 | Pink Butterfly Crochet Rattle and Comforter | 21,90 EUR | crochet animal toy / 14 × 20 × 4 cm | [MyUM](https://myum.fr/en/products/hochet-doudou-papillon-rose-100-coton-bio); sonajero/doudou, no muñeca equivalente |
-| 16 | Anne Claire Petit Bunny Crochet Doll | 45,00 EUR | amigurumi doll / 30 cm | [Maxland](https://www.maxland.gr/en/product/anne-claire-petit-bunny-doll); comparable como muñeca tejida terminada |
-| 17 | Anne Claire Petit Dog Crochet Doll | 48,75 EUR | amigurumi doll / 30 cm | [Maxland](https://www.maxland.gr/en/product/anne-claire-petit-dog-doll); comparable como muñeca tejida terminada |
+| 16 | Anne Claire Petit Bunny Crochet Doll | 45,00 EUR | amigurumi doll / 30 cm | [Maxland](https://www.maxland.gr/en/product/anne-claire-petit-bunny-doll); próxima por tipo, pero requiere tamaño y rasgos del producto valorado |
+| 17 | Anne Claire Petit Dog Crochet Doll | 48,75 EUR | amigurumi doll / 30 cm | [Maxland](https://www.maxland.gr/en/product/anne-claire-petit-dog-doll); próxima por tipo, pero requiere tamaño y rasgos del producto valorado |
 
 Las URL, fechas y tiendas exactas están en `data/amigurumis_referencias.csv`. La
 auditoría no demuestra ventas realizadas, demanda ni beneficio. Un precio anunciado
@@ -86,7 +86,8 @@ juguete reversible de fresa. La aritmética es correcta:
 La muestra de tres productos **no es homogénea** por tipo y tamaño. En la defensa se
 presentará como referencia orientativa de productos tejidos terminados en EUR, no
 como una valoración concluyente de muñecas equivalentes. Las dos referencias de
-Maxland sí son las comparables más cercanas. No procede afirmar que 81,25 EUR sea
+Maxland son las más cercanas por tipo, pero no demuestran comparabilidad directa sin
+el tamaño y características de la pieza valorada. No procede afirmar que 81,25 EUR sea
 “premium” solo por esta muestra ni estimar ventas o beneficios garantizados.
 
 ## Revisión de interfaz y casos límite

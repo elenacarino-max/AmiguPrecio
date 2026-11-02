@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from amiguprecio.app_runtime import WorkflowExecution
 from amiguprecio.models import PricingInput
+from amiguprecio.reporting import collect_presented_limitations
 from amiguprecio.vision import ImageValidationError, prepare_uploaded_image
 
 OUTPUT_ROOT = Path("output/streamlit")
@@ -43,10 +44,12 @@ st.markdown(
     [data-testid="stForm"] { background: var(--paper); border: 1px solid var(--line);
         border-radius: .55rem; padding: 1.35rem; }
     div.stButton > button[kind="primary"], div.stFormSubmitButton > button {
-        background: var(--coral); color: white; border-color: var(--coral);
+        background: #1f6f5f; color: #ffffff; border: none;
         border-radius: .38rem; font-weight: 750; }
     div.stButton > button[kind="primary"]:hover, div.stFormSubmitButton > button:hover {
-        background: var(--coral-dark); border-color: var(--coral-dark); }
+        background: #174f45; color: #ffffff; border: none; }
+    div.stButton > button:disabled, div.stFormSubmitButton > button:disabled {
+        background: #d9dfdc; color: #4b514e; border: none; opacity: 1; }
     button:focus-visible, input:focus-visible, textarea:focus-visible {
         outline: 3px solid var(--coral-soft) !important; outline-offset: 2px; }
     [data-testid="stMetric"] { border-top: 2px solid var(--green);
@@ -77,6 +80,7 @@ def _render_results(execution: WorkflowExecution) -> None:
 
     pricing = analysis["pricing"]
     statistics = analysis["statistics"]
+    comparison = analysis["commercial_comparability"]
     st.header("Resultado verificable")
     metric_cols = st.columns(4)
     metric_cols[0].metric("Mano de obra", f"{float(pricing['labor_cost']):.2f} €")
@@ -89,18 +93,30 @@ def _render_results(execution: WorkflowExecution) -> None:
         st.subheader("Comparación comercial")
         if statistics["valid_reference_count"]:
             st.write(
-                f"{statistics['valid_reference_count']} referencias comparables en EUR. "
-                f"Media: **{float(statistics['mean']):.2f} €** · "
+                f"{statistics['valid_reference_count']} referencias en la muestra EUR. "
+                f"Media de la muestra: **{float(statistics['mean']):.2f} €** · "
                 f"Mediana: **{float(statistics['median']):.2f} €**"
             )
         else:
-            st.warning("No existe una muestra monetariamente comparable en EUR.")
+            st.warning("No existe una muestra de referencias en EUR.")
+        st.write(
+            f"Comparables directamente: **{comparison['directly_comparable_count']}** · "
+            f"No comparables: **{comparison['not_comparable_count']}** · "
+            f"No determinables: **{comparison['undetermined_count']}**"
+        )
+        if comparison["sample_is_heterogeneous"]:
+            st.warning(comparison["conclusion"])
+        else:
+            st.info(comparison["conclusion"])
         chart_path = values.get("chart_path")
         if chart_path and Path(chart_path).exists():
-            st.image(chart_path, caption="Precio Python frente a referencias EUR")
+            st.image(chart_path, caption="Precio Python frente a la muestra EUR")
     with right:
         st.subheader("Referencias y procedencia")
         reference_result = values.get("references") or {}
+        comparison_by_title = {
+            item["title"]: item for item in comparison.get("references", [])
+        }
         for reference in reference_result.get("references", []):
             checked = str(reference["checked_at"]).split("T")[0]
             st.markdown(
@@ -109,6 +125,16 @@ def _render_results(execution: WorkflowExecution) -> None:
                 f"{reference['source_name']} · {reference['provenance']} · {checked}  \n"
                 f"[Abrir fuente]({reference['source_url']})"
             )
+            reference_comparison = comparison_by_title.get(reference["title"])
+            if reference_comparison:
+                status_label = {
+                    "comparable": "Comparable directamente",
+                    "not_comparable": "No comparable",
+                    "undetermined": "Comparabilidad no determinable",
+                }[reference_comparison["status"]]
+                st.write(
+                    f"**{status_label}:** {reference_comparison['reason']}"
+                )
         if reference_result.get("used_fallback"):
             st.caption("Dataset local de respaldo; no es una búsqueda web en directo.")
 
@@ -119,8 +145,6 @@ def _render_results(execution: WorkflowExecution) -> None:
         st.markdown(f"**Comparabilidad:** {assessment['comparability']}")
         st.markdown(f"**Posición:** {assessment['market_position']}")
         st.markdown(f"**Recomendación:** {assessment['recommendation']}")
-        for limitation in assessment["limitations"]:
-            st.caption(f"Limitación: {limitation}")
 
     st.subheader("Observación visual")
     visual = values.get("visual_analysis")
@@ -129,12 +153,20 @@ def _render_results(execution: WorkflowExecution) -> None:
         st.write("**Colores visibles:** " + ", ".join(visual["predominant_colors"]))
         st.write("**Forma y detalles:** " + ", ".join(visual["shape_and_details"]))
         st.caption(f"{visual['component']} · {visual['model']}")
-        for limitation in visual["limitations"]:
-            st.caption(f"Limitación visual: {limitation}")
     elif values.get("visual_status") == "failed":
         st.warning("El análisis visual no se completó; el resto del resultado sigue siendo válido.")
     else:
         st.caption("No se aportó fotografía.")
+
+    limitations = collect_presented_limitations(
+        comparison.get("limitations", []),
+        assessment.get("limitations", []) if assessment else [],
+        visual.get("limitations", []) if visual else [],
+    )
+    if limitations:
+        with st.expander(f"Limitaciones y alcance ({len(limitations)})"):
+            for limitation in limitations:
+                st.markdown(f"- {limitation}")
 
     if values.get("errors"):
         with st.expander("Incidencias técnicas"):

@@ -74,8 +74,9 @@ precios ambiguos. El respaldo local nunca se presenta como búsqueda web en dire
 
 Las monedas distintas no se mezclan ni convierten. Las referencias son precios
 anunciados en sus fechas de consulta, no ventas realizadas. En el caso de demostración
-la media de 41,55 EUR usa dos muñecas comparables y un juguete reversible menos
-equivalente; por ello la muestra debe describirse como orientativa y heterogénea.
+la media de 41,55 EUR usa dos muñecas más próximas por tipo y un juguete reversible;
+sin tamaño y características equivalentes del producto valorado, la muestra debe
+describirse como orientativa y heterogénea, no como comparación directa.
 
 Python es la única fuente oficial de costes, precio, estadísticas y gráfico. La
 revisión impide que el analista o el asesor sustituyan esas cifras. Un rechazo termina

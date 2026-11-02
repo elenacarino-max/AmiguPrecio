@@ -165,18 +165,20 @@ def search_references(
     if live:
         try:
             live_references = fetch_live_references(query, max_results=limit)
-            compatible_live = [
+            same_currency_live = [
                 reference
                 for reference in live_references
                 if requested_currency is None or reference.currency == requested_currency
             ]
-            if compatible_live and len(compatible_live) == limit:
-                return ReferenceSearchResult(query=query, references=compatible_live)
-            if live_references and requested_currency and not compatible_live:
+            if same_currency_live and len(same_currency_live) == limit:
+                return ReferenceSearchResult(query=query, references=same_currency_live)
+            if live_references and requested_currency and not same_currency_live:
                 errors.append(
                     f"La fuente en directo no devolvió referencias en {requested_currency}."
                 )
-            errors.append("La fuente en directo no devolvió referencias comparables.")
+            errors.append(
+                "La fuente en directo no devolvió suficientes referencias en la moneda solicitada."
+            )
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             errors.append(f"Fuente en directo inaccesible: {type(exc).__name__}: {exc}")
     saved = load_saved_references(

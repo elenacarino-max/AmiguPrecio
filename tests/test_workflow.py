@@ -6,13 +6,20 @@ import pytest
 
 from amiguprecio.agents import (
     AssessmentValidationError,
+    CommercialAssessment,
     MCPReferenceSearchTool,
 )
 from amiguprecio.models import PricingInput
-from amiguprecio.references import MarketReference, ReferenceSearchResult
+from amiguprecio.references import (
+    MarketReference,
+    ReferenceSearchResult,
+    load_saved_references,
+)
+from amiguprecio.reporting import collect_presented_limitations
 from amiguprecio.workflow import (
     AgentOutputError,
     analyst_payload,
+    enforce_supported_commercial_assessment,
     run_deterministic_analysis,
     validate_analyst_observations,
 )
@@ -132,12 +139,73 @@ def test_analyst_payload_is_short_and_preserves_control_case(tmp_path) -> None:
 
     payload = analyst_payload(analysis)
 
-    assert payload == {
-        "production_cost": "65.00",
-        "calculated_price": "81.25",
-        "margin_percent": "20",
-        "pricing_currency": "EUR",
-        "valid_reference_count": 0,
-        "reference_currencies": ["USD"],
-        "market_mean": None,
-    }
+    assert payload["production_cost"] == "65.00"
+    assert payload["calculated_price"] == "81.25"
+    assert payload["margin_percent"] == "20"
+    assert payload["pricing_currency"] == "EUR"
+    assert payload["currency_sample_count"] == 0
+    assert payload["reference_currencies"] == ["USD"]
+    assert payload["currency_sample_mean"] is None
+    assert payload["commercial_comparability"]["directly_comparable_count"] == 0
+
+
+def test_hello_kitty_keeps_money_but_rejects_unsupported_positioning(tmp_path) -> None:
+    product = PricingInput(
+        product_name="Hello Kitty",
+        product_type="muñeca amigurumi",
+        materials_cost="10",
+        hours_worked="1.5",
+        hourly_rate="20",
+        other_expenses="0",
+        margin_percent="20",
+    )
+    references = load_saved_references("muñeca amigurumi", currency="EUR")
+    analysis = run_deterministic_analysis(
+        product,
+        references,
+        chart_path=tmp_path / "hello-kitty.png",
+    )
+
+    assert analysis.pricing.production_cost == Decimal("40.00")
+    assert analysis.pricing.calculated_price == Decimal("50.00")
+    assert analysis.statistics.valid_reference_count == 3
+    assert analysis.statistics.mean == Decimal("41.55")
+    assert analysis.commercial_comparability.directly_comparable_count == 0
+    assert analysis.commercial_comparability.not_comparable_count == 1
+    assert analysis.commercial_comparability.undetermined_count == 2
+    assert analysis.commercial_comparability.sample_is_heterogeneous is True
+
+    unsafe = CommercialAssessment(
+        comparability="Las tres referencias permiten una comparación directa.",
+        market_position="El margen del 20 % confirma un posicionamiento premium.",
+        recommendation="Mantener el precio actual porque no existen discrepancias.",
+        limitations=["La fotografía no permite determinar el material exacto."],
+    )
+    safe = enforce_supported_commercial_assessment(unsafe, analysis)
+
+    assert safe.market_position == (
+        "No es posible determinar el posicionamiento de mercado con estas referencias."
+    )
+    assert "premium" not in safe.model_dump_json().casefold()
+    assert "mantener el precio actual" not in safe.recommendation.casefold()
+    assert any("margen objetivo" in item.casefold() for item in safe.limitations)
+
+    analyst_text = validate_analyst_observations(
+        "El precio de 50,00 EUR supera la media de 41,55 EUR y es premium con margen 20,00 %.",
+        analysis,
+    )
+    assert "premium" not in analyst_text.casefold()
+    assert "muestra monetaria" in analyst_text.casefold()
+
+
+def test_presented_limitations_are_grouped_without_mutating_sources() -> None:
+    advisor = [
+        "La fotografía no permite determinar el material exacto.",
+        "Los precios anunciados no prueban ventas ni demanda.",
+    ]
+    visual = ["La fotografía no permite determinar el material exacto."]
+
+    presented = collect_presented_limitations(advisor, visual)
+
+    assert presented == advisor
+    assert visual == ["La fotografía no permite determinar el material exacto."]

@@ -24,6 +24,7 @@ from amiguprecio.reporting import render_markdown_report, save_markdown_report
 from amiguprecio.vision import PreparedImage, VisualAnalysis
 from amiguprecio.workflow import (
     DeterministicAnalysis,
+    enforce_supported_commercial_assessment,
     run_advisor_agent,
     run_analyst_agent,
     run_deterministic_analysis,
@@ -403,6 +404,7 @@ def build_amiguprecio_graph(
                 validated,
                 analysis.model_dump(mode="json"),
             )
+            validated = enforce_supported_commercial_assessment(validated, analysis)
         except Exception as exc:  # noqa: BLE001 - decide el reintento acotado
             return _retry_or_error(
                 state,

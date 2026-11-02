@@ -17,6 +17,21 @@ def _table_text(value: object | None) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
+def collect_presented_limitations(*groups: list[str]) -> list[str]:
+    """Agrupa limitaciones para presentación sin alterar los modelos originales."""
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for value in group:
+            cleaned = " ".join(value.split()).strip()
+            key = cleaned.casefold().rstrip(".")
+            if cleaned and key not in seen:
+                seen.add(key)
+                result.append(cleaned)
+    return result
+
+
 def render_markdown_report(
     product: PricingInput,
     references: ReferenceSearchResult,
@@ -80,17 +95,29 @@ def render_markdown_report(
     lines.extend(["", "## Comparación", ""])
     if analysis.statistics.valid_reference_count == 0:
         lines.append(
-            f"No existe una muestra válida comparable en {pricing_currency}; "
+            f"No existe una muestra de referencias en {pricing_currency}; "
             "no se calcula ni se inventa una media de mercado."
         )
     else:
         lines.extend(
             [
-                f"- Referencias comparables: {analysis.statistics.valid_reference_count}",
-                f"- Media: {analysis.statistics.mean:.2f} {pricing_currency}",
-                f"- Mediana: {analysis.statistics.median:.2f} {pricing_currency}",
+                (
+                    f"- Referencias en la muestra {pricing_currency}: "
+                    f"{analysis.statistics.valid_reference_count}"
+                ),
+                f"- Media de la muestra: {analysis.statistics.mean:.2f} {pricing_currency}",
+                f"- Mediana de la muestra: {analysis.statistics.median:.2f} {pricing_currency}",
             ]
         )
+    comparison = analysis.commercial_comparability
+    lines.extend(
+        [
+            f"- Comparables directamente: {comparison.directly_comparable_count}",
+            f"- No comparables: {comparison.not_comparable_count}",
+            f"- Comparabilidad no determinable: {comparison.undetermined_count}",
+            f"- Conclusión: {comparison.conclusion}",
+        ]
+    )
 
     lines.extend(["", "## Análisis visual", ""])
     if visual_analysis is not None:
@@ -103,7 +130,6 @@ def render_markdown_report(
                 f"- Componente: {visual_analysis.component} ({visual_analysis.model})",
             ]
         )
-        lines.extend(f"- Limitación visual: {item}" for item in visual_analysis.limitations)
     elif visual_error:
         lines.append(f"Análisis visual no completado: {visual_error}")
     else:
@@ -126,12 +152,18 @@ def render_markdown_report(
             f"- Posición de mercado: {assessment.market_position}",
             f"- Recomendación: {assessment.recommendation}",
             "",
-            "## Fuentes y limitaciones",
+            "## Limitaciones y alcance",
             "",
         ]
     )
-    for limitation in assessment.limitations:
+    presented_limitations = collect_presented_limitations(
+        comparison.limitations,
+        assessment.limitations,
+        visual_analysis.limitations if visual_analysis is not None else [],
+    )
+    for limitation in presented_limitations:
         lines.append(f"- {limitation}")
+    lines.extend(["", "## Procedencia e incidencias de fuentes", ""])
     for error in references.errors:
         lines.append(f"- Incidencia de fuente: {error}")
     lines.append(
