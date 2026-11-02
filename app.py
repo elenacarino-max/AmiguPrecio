@@ -233,7 +233,10 @@ if execution is None:
             with st.status("Ejecutando el flujo real…", expanded=True) as status:
                 for stage in execution.start():
                     st.write(STAGE_LABELS.get(stage, stage))
-                status.update(label="Flujo detenido para revisión", state="complete")
+                if execution.values.get("review_status") == "error":
+                    status.update(label="Flujo detenido por un error", state="error")
+                else:
+                    status.update(label="Flujo detenido para revisión", state="complete")
         except (ValidationError, ImageValidationError) as exc:
             st.error(f"Revisa los datos: {exc}")
         except Exception as exc:  # noqa: BLE001 - frontera de UI, mensaje redactado

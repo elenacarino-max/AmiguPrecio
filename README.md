@@ -1,59 +1,89 @@
 # AmiguPrecio
 
-MVP para que artesanas y artesanos calculen un precio rentable para sus amigurumis y, en las siguientes fases, lo contrasten con referencias reales y trazables del mercado.
+AmiguPrecio es un MVP local para que artesanas y pequeños negocios calculen un
+precio sostenible para un amigurumi, lo contrasten con referencias comerciales
+trazables y decidan si desean guardar un informe. No predice ventas ni promete
+beneficios: combina cálculo determinista, agentes de IA y supervisión humana.
 
-## Estado
-
-**Fase 4 funcional:** cálculo determinista, interfaz Streamlit completa, tres agentes
-CrewAI, servidor MCP local, comparación con referencias EUR, visión mediante Groq
-y un `StateGraph` con revisión limitada, interrupción humana, reanudación y descargas.
-
-La fórmula implementada es:
+La fórmula es:
 
 ```text
 coste de producción = materiales + (horas × tarifa por hora) + otros gastos
 precio calculado = coste de producción / (1 - margen / 100)
 ```
 
-El margen es margen sobre ventas, no un recargo sobre costes. El resultado no incluye comisiones, impuestos ni gastos no declarados.
+El margen es margen sobre ventas, no un recargo sobre costes. El resultado no incluye
+comisiones, impuestos ni gastos que la persona no haya introducido.
 
-## Arquitectura objetivo (MVP)
+## Funcionalidades y arquitectura
+
+- formulario Streamlit con costes, margen y fotografía opcional;
+- cálculo monetario con `Decimal` y validación Pydantic;
+- tres agentes CrewAI con responsabilidades distintas;
+- consulta de referencias mediante cliente y servidor MCP reales;
+- dataset local de 17 productos terminados con URL, fecha, tienda y procedencia;
+- gráfico de comparación generado por Python;
+- análisis visual real mediante Groq cuando se aporta una foto;
+- LangGraph con estado tipado, rutas condicionales, un reintento máximo e
+  interrupción humana;
+- informe Markdown y gráfico descargables únicamente tras aprobación.
 
 ```mermaid
 flowchart LR
-    UI[Streamlit] --> LG[LangGraph\nestado y control]
-    LG --> A1[CrewAI\ninvestigador]
-    LG --> A2[CrewAI\nanalista]
-    LG --> A3[CrewAI\nasesor visual]
-    A1 --> MCP[Servidor MCP\nreferencias]
-    A2 --> PY[Python\nPydantic + pandas + matplotlib]
-    A3 --> V[Modelo multimodal]
-    LG --> HITL{Aprobación humana}
-    HITL -->|aprobar| REPORT[Informe descargable]
-    HITL -->|rechazar| END[Fin sin guardar]
+    UI[Streamlit] --> LG[LangGraph<br/>estado y control]
+    LG --> R[Investigador CrewAI]
+    R -->|invoca autónomamente| MCP[Tool MCP<br/>referencias]
+    LG --> COORD[Coordinador Python]
+    COORD -->|invoca directamente| CALC[PricingAnalysisTool<br/>Pydantic + Decimal + gráfico]
+    LG --> AN[Analista CrewAI<br/>interpreta, sin tools]
+    LG --> AD[Asesor CrewAI]
+    AD -->|si hay foto, invoca autónomamente| VIS[Tool visual<br/>Groq]
+    LG --> REV{Revisión limitada}
+    REV --> HITL{Aprobación humana}
+    HITL -->|aprobar| REP[Informe descargable]
+    HITL -->|rechazar| END[Fin sin informe]
 ```
 
-CrewAI define roles y herramientas especializadas. LangGraph controla el orden, los límites, la revisión y la pausa humana; no duplica el trabajo de los agentes.
+CrewAI aporta roles y uso autónomo de herramientas. MCP separa el investigador de la
+fuente de referencias. LangGraph controla el orden, los errores, el único reintento,
+el checkpoint y la pausa humana; no es un cuarto agente.
 
-## Estructura
+### Función real de cada agente
 
-```text
-AmiguPrecio/
-├── app.py
-├── docs/briefing.pdf
-├── src/amiguprecio/
-│   ├── agents.py
-│   ├── langgraph_workflow.py
-│   ├── reporting.py
-│   └── workflow.py
-├── tests/
-├── .env.example
-└── pyproject.toml
-```
+1. **Investigador:** invoca autónomamente `search_market_references`, que usa el
+   cliente y servidor MCP. Conserva el resultado Pydantic original y distingue
+   procedencia `live` de `saved`.
+2. **Analista:** interpreta un resumen breve del resultado oficial de Python. No
+   dispone de herramientas ni puede recalcular o sustituir los importes.
+3. **Asesor comercial:** genera un JSON cualitativo validado con
+   `CommercialAssessment`. Con fotografía, invoca autónomamente la herramienta
+   visual.
 
-## Instalación en Windows (PowerShell)
+`PricingAnalysisTool` es una herramienta propia con contrato Pydantic, pero en el
+flujo de producción la ejecuta directamente el coordinador Python una sola vez. Esta
+distinción evita presentar una operación determinista como decisión autónoma del
+LLM.
 
-Requisitos: Git y [uv](https://docs.astral.sh/uv/). `uv` instalará una versión compatible de Python si hace falta.
+## Referencias, cálculo y trazabilidad
+
+La fuente web en directo disponible es el catálogo público de SweetLavenderCo. Tiene
+timeout y un máximo de tres resultados. Para precios en EUR, o si la consulta falla o
+queda vacía, el MCP usa `data/amigurumis_referencias.csv`. Ese archivo contiene 17
+productos terminados verificados en USD, GBP, INR y EUR; no incluye patrones, kits ni
+precios ambiguos. El respaldo local nunca se presenta como búsqueda web en directo.
+
+Las monedas distintas no se mezclan ni convierten. Las referencias son precios
+anunciados en sus fechas de consulta, no ventas realizadas. En el caso de demostración
+la media de 41,55 EUR usa dos muñecas comparables y un juguete reversible menos
+equivalente; por ello la muestra debe describirse como orientativa y heterogénea.
+
+Python es la única fuente oficial de costes, precio, estadísticas y gráfico. La
+revisión impide que el analista o el asesor sustituyan esas cifras. Un rechazo termina
+sin informe; una aprobación reanuda el mismo `thread_id` y guarda una sola vez.
+
+## Instalación en Windows
+
+Requisitos: Git y [uv](https://docs.astral.sh/uv/).
 
 ```powershell
 git clone https://github.com/elenacarino-max/AmiguPrecio.git
@@ -62,13 +92,34 @@ Copy-Item .env.example .env
 uv sync --extra dev
 ```
 
-No añadas claves a Git. La interfaz completa consume Groq al ejecutar los agentes y,
-si se aporta una fotografía, realiza además una única llamada visual.
+Editar `.env` sin compartir ni versionar la clave:
 
-## Ejecutar
+| Variable | Uso |
+|---|---|
+| `GROQ_API_KEY` | Credencial obligatoria para agentes y visión |
+| `GROQ_MODEL` | Modelo del investigador vía LiteLLM |
+| `GROQ_ANALYST_MODEL` | Modelo opcional específico del analista |
+| `GROQ_ADVISOR_MODEL` | Modelo opcional específico del asesor |
+| `GROQ_VISION_MODEL` | Modelo del endpoint visual de Groq |
+| `MAX_LLM_CALLS` | Valor documental; no aplica un corte automático actualmente |
+| `MAX_ESTIMATED_COST_EUR` | Valor documental; no aplica un corte automático actualmente |
+
+Los valores recomendados están en `.env.example`. Nunca añadas la clave real a Git.
+
+Iniciar la interfaz:
 
 ```powershell
 uv run streamlit run app.py
+```
+
+Ejemplos auxiliares:
+
+```powershell
+# MCP reproducible sin LLM ni llamada de pago
+uv run python examples/phase2_demo.py
+
+# Flujo LangGraph real e interactivo; consume Groq
+uv run python examples/phase3_langgraph.py
 ```
 
 ## Pruebas y calidad
@@ -78,97 +129,33 @@ uv run pytest
 uv run ruff check .
 ```
 
-## Hoja de ruta mínima
+La última ejecución funcional completa de Fase 4 superó 62 pruebas y Ruff. En la
+auditoría final, una repetición de Pytest quedó bloqueada durante la colección por la
+política Enterprise de integridad de código de Windows al cargar la DLL no firmada
+`pandas_datetime.cp311-win_amd64.pyd`; no fue un fallo de prueba. No se ha desactivado
+ni eludido la política. La evidencia y los pasos pendientes están en
+`docs/auditoria_final.md`.
 
-1. **Fase 1:** calculadora validada e interfaz base. Completada.
-2. **Fase 2:** tres agentes CrewAI y herramientas; servidor y cliente MCP reales. Completada.
-3. **Fase 3:** flujo híbrido y LangGraph con revisión limitada, errores,
-   pausa/reanudación e informe. Completada.
-4. **Fase 4:** visión, referencias EUR e interfaz completa. Completada.
-5. **Fase 5:** auditoría contra el briefing, documentación y guion de demo.
+## Seguridad, privacidad y limitaciones
 
-## Fuente de requisitos
+La fotografía es opcional. Se admiten JPEG, PNG y WebP de hasta 5 MB. La app valida
+los píxeles, limita dimensiones, corrige orientación y recodifica sin EXIF. No acepta
+URLs ni guarda la imagen, aunque envía sus bytes una vez a Groq. El modelo puede
+describir rasgos visibles, pero no deducir material exacto, tamaño, horas, coste,
+calidad o demanda.
 
-El briefing oficial se conserva en `docs/briefing.pdf`. Sus mínimos prevalecen sobre decisiones auxiliares de implementación.
+Los errores externos se muestran sin secretos. Las iteraciones, tokens, reintentos y
+timeouts están acotados; no existe todavía un medidor de coste con corte automático.
+El checkpointer es `InMemorySaver`: reiniciar Streamlit pierde sesiones pendientes.
+La UI informa por nodos completados, no ofrece telemetría intra-nodo de cada llamada.
+El catálogo es pequeño y sus precios requieren revisión periódica.
 
-## Fase 2: agentes y MCP
+## Entrega y autoría
 
-La solución contiene exactamente tres agentes: investigador, analista y asesor
-comercial. El investigador recibe `search_market_references`, que usa el cliente y
-servidor MCP reales; el cálculo Python se ejecuta fuera del LLM; y la salida del
-asesor se valida localmente mediante `CommercialAssessment`.
+El proyecto se ha desarrollado individualmente y el historial contiene commits
+locales por hitos. No se simulan ramas, pull requests ni revisiones colaborativas que
+no existieron.
 
-La fuente en directo es el catálogo JSON público de SweetLavenderCo. La consulta tiene un timeout, un máximo de tres resultados y conserva URL, precio, moneda, fecha y procedencia `live`. Si falla o queda vacía, se consulta `data/amigurumis_referencias.csv` y cada registro se marca como `saved`. El CSV contiene 17 productos terminados verificados, incluidos cinco en EUR. Conserva también referencias en USD, GBP e INR, sin mezclar ni convertir monedas. No contiene patrones, kits ni precios ambiguos.
-
-```powershell
-# Demostración MCP reproducible, sin LLM ni llamadas de pago
-uv run python examples/phase2_demo.py
-
-# Solo con credenciales y cuando se quiera probar la crew completa
-uv run python examples/phase2_demo.py --run-llm
-```
-
-La ejecución real usa `GROQ_API_KEY` y permite seleccionar el modelo con
-`GROQ_MODEL`. El valor recomendado actualmente es `groq/openai/gpt-oss-20b`;
-el prefijo `groq/` corresponde al enrutado de LiteLLM y el identificador del
-modelo publicado por Groq es `openai/gpt-oss-20b`.
-
-### Flujo híbrido verificable
-
-La ejecución de Fase 3 separa responsabilidades deliberadamente:
-
-1. El investigador CrewAI invoca autónomamente `search_market_references`, una
-   herramienta que usa el cliente y servidor MCP reales y conserva el resultado
-   original como modelos Pydantic.
-2. El coordinador Python invoca `PricingAnalysisTool` directamente una sola vez.
-   Esta ejecución no se presenta como una decisión autónoma del LLM y constituye
-   la fuente oficial de costes, precio, estadísticas y gráfico.
-3. El analista CrewAI interpreta el resultado Python sin herramientas ni capacidad
-   para sobrescribir cifras.
-4. El asesor CrewAI genera JSON cualitativo, validado después mediante
-   `CommercialAssessment` y comprobado contra los valores oficiales.
-
-Cada etapa conserva resultados parciales. Si un agente falla o devuelve una salida
-vacía, no se repiten la consulta MCP ni los cálculos deterministas.
-
-La API de Mercado Libre se probó como posible fuente, pero respondió HTTP 403. No se oculta como fuente funcional ni se sustituye por datos simulados. Los precios en USD no se convierten automáticamente a EUR; comparar monedas distintas requiere conversión explícita en una fase posterior.
-
-### LangGraph y aprobación humana
-
-`src/amiguprecio/langgraph_workflow.py` construye el recorrido investigación →
-cálculo → analista → asesor → revisión → aprobación → informe. El estado de
-checkpoint usa representaciones JSON y se revalida con Pydantic al entrar en cada
-componente. La revisión permite como máximo un reintento del analista o asesor y
-nunca repite automáticamente MCP ni un cálculo correcto.
-
-El nodo de aprobación llama a `interrupt()`. La ejecución debe continuar mediante
-`Command(resume=...)` y el mismo `thread_id`. Un rechazo termina sin escribir el
-informe; una aprobación explícita genera un único Markdown.
-
-```powershell
-# Ejecución real e interactiva; consume Groq y consulta MCP una sola vez
-uv run python examples/phase3_langgraph.py
-```
-
-Las pruebas de LangGraph usan sustitutos deterministas. Demuestran el flujo, los
-errores, el reintento acotado y la pausa/reanudación, pero no se presentan como
-ejecuciones reales de IA.
-
-### Visión y privacidad
-
-La fotografía es opcional. Se admiten JPEG, PNG y WebP de hasta 5 MB. La aplicación
-comprueba que el archivo contiene píxeles reales, limita sus dimensiones, corrige la
-orientación y lo recodifica sin EXIF. No acepta URLs ni persiste la imagen en disco.
-Los bytes limpios se envían una vez como `data:` URL al modelo configurado mediante
-`GROQ_VISION_MODEL` (por defecto `qwen/qwen3.8-27b`).
-
-El modelo solo describe tipo aparente, colores, forma, detalles y rasgos comparables.
-No puede deducir tamaño exacto, material, horas, coste, calidad o demanda. Un fallo
-visual se registra como limitación y no invalida los cálculos o referencias.
-
-La sesión conserva en memoria el grafo, el checkpointer, el `thread_id`, resultados y
-decisión. Aprobar o rechazar usa `Command(resume=...)` sobre el mismo checkpoint, sin
-repetir MCP, Python ni agentes. Al usar `InMemorySaver`, reiniciar el proceso de
-Streamlit pierde las sesiones pendientes; los informes ya aprobados permanecen en
-`output/streamlit/`.
-
+- [Auditoría contra el briefing](docs/auditoria_final.md)
+- [Guion de presentación de 7–10 minutos](docs/guion_presentacion.md)
+- [Briefing original](docs/briefing.pdf)
