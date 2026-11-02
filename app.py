@@ -64,6 +64,10 @@ st.markdown(
         h1 { font-size: 2rem !important; }
         .brand-line { font-size: .67rem; line-height: 1.45; }
     }
+    div.stFormSubmitButton button p,
+    div.stButton button[kind="primary"] p {
+        color: inherit !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
