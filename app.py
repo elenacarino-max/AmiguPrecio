@@ -156,6 +156,8 @@ def _render_results(execution: WorkflowExecution) -> None:
         st.markdown(f"**Comparabilidad:** {assessment['comparability']}")
         st.markdown(f"**Posición:** {assessment['market_position']}")
         st.markdown(f"**Recomendación:** {assessment['recommendation']}")
+    elif values.get("report_kind") == "partial":
+        st.warning("Valoración del asesor comercial no disponible.")
 
     st.subheader("Observación visual")
     visual = values.get("visual_analysis")
@@ -186,14 +188,28 @@ def _render_results(execution: WorkflowExecution) -> None:
                 st.write(error)
 
     if execution.waiting_for_approval:
-        st.markdown(
-            '<div class="status-ok"><strong>Revisión automática superada.</strong> '
-            "Decide si deseas guardar el informe.</div>",
-            unsafe_allow_html=True,
-        )
+        partial = values.get("report_kind") == "partial"
+        if partial:
+            st.warning(
+                "El asesor comercial no produjo una salida válida. Los cálculos Python, "
+                "las fuentes y el gráfico se conservan. Puedes aprobar explícitamente un "
+                "informe técnico parcial."
+            )
+        else:
+            st.markdown(
+                '<div class="status-ok"><strong>Revisión automática superada.</strong> '
+                "Decide si deseas guardar el informe.</div>",
+                unsafe_allow_html=True,
+            )
         approve_col, reject_col = st.columns(2)
         if approve_col.button(
-            "Aprobar y generar informe", type="primary", use_container_width=True
+            (
+                "Aprobar informe técnico parcial"
+                if partial
+                else "Aprobar y generar informe"
+            ),
+            type="primary",
+            use_container_width=True,
         ):
             execution.resume(True)
             st.rerun()
@@ -206,12 +222,17 @@ def _render_results(execution: WorkflowExecution) -> None:
         st.success("Informe aprobado y guardado. El flujo no se ha vuelto a ejecutar.")
         report_path = Path(values["report_path"])
         chart_path = Path(values["chart_path"])
+        assessment_model = (
+            CommercialAssessment.model_validate(values["commercial_assessment"])
+            if values.get("commercial_assessment") is not None
+            else None
+        )
         pdf_bytes = render_pdf_report(
             PricingInput.model_validate(values["product"]),
             ReferenceSearchResult.model_validate(values["references"]),
             DeterministicAnalysis.model_validate(values["deterministic_analysis"]),
             str(values["analyst_observations"]),
-            CommercialAssessment.model_validate(values["commercial_assessment"]),
+            assessment_model,
             pricing_currency=str(values["pricing_currency"]),
             visual_analysis=(
                 VisualAnalysis.model_validate(values["visual_analysis"])
@@ -221,6 +242,7 @@ def _render_results(execution: WorkflowExecution) -> None:
             visual_error=(
                 str(values["visual_error"]) if values.get("visual_error") is not None else None
             ),
+            partial_report=values.get("report_kind") == "partial",
         )
         download_cols = st.columns(3)
         download_cols[0].download_button(

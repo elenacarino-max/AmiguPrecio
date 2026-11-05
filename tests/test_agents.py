@@ -28,7 +28,7 @@ def test_exactly_three_agents_are_configured(monkeypatch, tmp_path) -> None:
     assert len(researcher.tools) == 1
     assert researcher.tools[0].name == "search_market_references"
     assert analyst.tools == []
-    assert advisor.tools == []
+    assert [tool.name for tool in advisor.tools] == ["submit_commercial_assessment"]
 
 
 def test_crew_uses_sequential_process(monkeypatch, tmp_path) -> None:
@@ -311,6 +311,75 @@ def test_advisor_contract_is_extracted_from_tool_output_without_relaxing_schema(
 
     assert assessment.market_position == "No determinable"
     assert assessment.limitations == ["La muestra es heterogénea"]
+
+
+def test_advisor_contract_can_be_nested_as_a_json_string() -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+    contract = {
+        "comparability": "Insuficiente",
+        "market_position": "No determinable",
+        "recommendation": "Reunir referencias más equivalentes",
+        "limitations": ["Muestra heterogénea"],
+    }
+    raw_output = json.dumps({"final_answer": json.dumps(contract)})
+
+    assessment = agents_module.validate_commercial_assessment(raw_output)
+
+    assert assessment.model_dump() == contract
+
+
+def test_advisor_empty_output_has_safe_diagnostics() -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+
+    with pytest.raises(agents_module.AssessmentValidationError) as error:
+        agents_module.validate_commercial_assessment("")
+
+    message = str(error.value)
+    assert "longitud=0" in message
+    assert "motivo=respuesta_vacia" in message
+    assert "faltan=comparability,limitations,market_position,recommendation" in message
+
+
+def test_advisor_truncated_output_has_safe_diagnostics() -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+    raw = '{"comparability":"Insuficiente","market_position":"No determinable"'
+
+    with pytest.raises(agents_module.AssessmentValidationError) as error:
+        agents_module.validate_commercial_assessment(raw)
+
+    assert "motivo=json_truncado" in str(error.value)
+    assert raw not in str(error.value)
+
+
+def test_advisor_incomplete_json_reports_keys_and_missing_fields() -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+
+    with pytest.raises(agents_module.AssessmentValidationError) as error:
+        agents_module.validate_commercial_assessment(
+            '{"comparability":"Insuficiente","limitations":["Muestra heterogénea"]}'
+        )
+
+    message = str(error.value)
+    assert "claves=comparability,limitations" in message
+    assert "faltan=market_position,recommendation" in message
+    assert "motivo=campos_ausentes" in message
+
+
+def test_submission_tool_preserves_pydantic_contract() -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+    tool = agents_module.CommercialAssessmentSubmissionTool()
+
+    result = tool._run(
+        comparability="Insuficiente",
+        market_position="No determinable",
+        recommendation="Reunir referencias más equivalentes",
+        limitations=["Muestra heterogénea"],
+    )
+
+    assert tool.last_result is not None
+    assert result == tool.last_result.model_dump(mode="json")
+    with pytest.raises(ValidationError):
+        tool._run(comparability="Insuficiente")
 
 
 def test_advisor_cannot_replace_python_price_8125_with_7800() -> None:

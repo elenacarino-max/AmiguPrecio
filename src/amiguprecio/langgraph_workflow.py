@@ -33,9 +33,10 @@ from amiguprecio.workflow import (
     validate_analyst_observations,
 )
 
-ReviewStatus = Literal["pending", "retry", "approved", "error"]
+ReviewStatus = Literal["pending", "retry", "approved", "partial", "error"]
 HumanDecision = Literal["pending", "approved", "rejected"]
 ReportStatus = Literal["pending", "saved", "not_saved", "error"]
+ReportKind = Literal["full", "partial"]
 RetryStage = Literal["analyst", "advisor"]
 
 
@@ -58,6 +59,7 @@ class AmiguPrecioGraphState(TypedDict):
     retry_count: int
     human_decision: HumanDecision
     report_status: ReportStatus
+    report_kind: ReportKind
     report_path: str | None
     research_attempts: int
     calculation_attempts: int
@@ -193,6 +195,7 @@ def initial_graph_state(
         retry_count=0,
         human_decision="pending",
         report_status="pending",
+        report_kind="full",
         report_path=None,
         research_attempts=0,
         calculation_attempts=0,
@@ -227,6 +230,14 @@ def _retry_or_error(
             "retry_stage": stage,
             "retry_count": state["retry_count"] + 1,
         }
+    if stage == "advisor":
+        return {
+            "errors": errors,
+            "review_status": "partial",
+            "retry_stage": None,
+            "report_status": "pending",
+            "report_kind": "partial",
+        }
     return {
         "errors": errors,
         "review_status": "error",
@@ -241,6 +252,30 @@ def build_amiguprecio_graph(
     checkpointer: object | None = None,
 ):
     """Compila el grafo con revisión condicional e interrupción humana real."""
+
+    def visual_state(state: AmiguPrecioGraphState) -> dict[str, object]:
+        if not state["visual_requested"]:
+            return {}
+        visual = (
+            services.get_visual_analysis()
+            if services.get_visual_analysis is not None
+            else None
+        )
+        visual_error = (
+            services.get_visual_error()
+            if services.get_visual_error is not None
+            else "La herramienta visual no está disponible"
+        )
+        if visual is not None:
+            return {
+                "visual_status": "completed",
+                "visual_analysis": visual.model_dump(mode="json"),
+                "visual_error": None,
+            }
+        return {
+            "visual_status": "failed",
+            "visual_error": visual_error or "El asesor no ejecutó la herramienta visual",
+        }
 
     def research_node(state: AmiguPrecioGraphState) -> dict[str, object]:
         if state["references"] is not None:
@@ -330,33 +365,13 @@ def build_amiguprecio_graph(
                 "commercial_assessment": None,
                 "errors": _with_error(state, "asesor", exc),
                 "advisor_attempts": state["advisor_attempts"] + 1,
+                **visual_state(state),
             }
         result: dict[str, object] = {
             "commercial_assessment": assessment.model_dump(mode="json"),
             "advisor_attempts": state["advisor_attempts"] + 1,
         }
-        if state["visual_requested"]:
-            visual = (
-                services.get_visual_analysis()
-                if services.get_visual_analysis is not None
-                else None
-            )
-            visual_error = (
-                services.get_visual_error()
-                if services.get_visual_error is not None
-                else "La herramienta visual no está disponible"
-            )
-            if visual is not None:
-                result.update(
-                    visual_status="completed",
-                    visual_analysis=visual.model_dump(mode="json"),
-                    visual_error=None,
-                )
-            else:
-                result.update(
-                    visual_status="failed",
-                    visual_error=visual_error or "El asesor no ejecutó la herramienta visual",
-                )
+        result.update(visual_state(state))
         return result
 
     def review_node(state: AmiguPrecioGraphState) -> dict[str, object]:
@@ -425,12 +440,19 @@ def build_amiguprecio_graph(
             "commercial_assessment": validated.model_dump(mode="json"),
             "review_status": "approved",
             "retry_stage": None,
+            "report_kind": "full",
         }
 
     def approval_node(state: AmiguPrecioGraphState) -> dict[str, object]:
+        partial = state["report_kind"] == "partial"
         decision = interrupt(
             {
-                "question": "¿Apruebas la generación del informe de AmiguPrecio?",
+                "question": (
+                    "¿Apruebas la generación del informe técnico parcial de AmiguPrecio?"
+                    if partial
+                    else "¿Apruebas la generación del informe de AmiguPrecio?"
+                ),
+                "report_kind": state["report_kind"],
                 "product": str(state["product"]["product_name"]),
                 "calculated_price": str(
                     state["deterministic_analysis"]["pricing"]["calculated_price"]
@@ -454,14 +476,21 @@ def build_amiguprecio_graph(
         analysis_data = state["deterministic_analysis"]
         observations = state["analyst_observations"]
         assessment_data = state["commercial_assessment"]
-        if not all([references_data, analysis_data, observations, assessment_data]):
+        partial = state["report_kind"] == "partial"
+        if not all([references_data, analysis_data, observations]) or (
+            not partial and assessment_data is None
+        ):
             return {
                 "report_status": "error",
                 "errors": [*state["errors"], "informe: faltan datos aprobados"],
             }
         references = ReferenceSearchResult.model_validate(references_data)
         analysis = DeterministicAnalysis.model_validate(analysis_data)
-        assessment = CommercialAssessment.model_validate(assessment_data)
+        assessment = (
+            CommercialAssessment.model_validate(assessment_data)
+            if assessment_data is not None
+            else None
+        )
         content = render_markdown_report(
             PricingInput.model_validate(state["product"]),
             references,
@@ -475,6 +504,7 @@ def build_amiguprecio_graph(
                 else None
             ),
             visual_error=state["visual_error"],
+            partial_report=partial,
         )
         try:
             path = services.save_report(
@@ -498,6 +528,8 @@ def build_amiguprecio_graph(
 
     def after_review(state: AmiguPrecioGraphState) -> str:
         if state["review_status"] == "approved":
+            return "approval"
+        if state["review_status"] == "partial":
             return "approval"
         if state["review_status"] == "retry":
             return state["retry_stage"] or "end"

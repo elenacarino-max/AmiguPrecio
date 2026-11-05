@@ -101,3 +101,36 @@ def test_download_requires_saved_report_and_real_human_approval() -> None:
     assert not can_download_approved_report(
         {"report_status": "not_saved", "human_decision": "rejected"}
     )
+
+
+def test_partial_markdown_and_pdf_are_explicit_and_keep_verified_data(tmp_path) -> None:
+    product, references, analysis, _, visual = _approved_report_data(tmp_path)
+
+    markdown = render_markdown_report(
+        product,
+        references,
+        analysis,
+        "Interpretación prudente basada en Python.",
+        None,
+        visual_analysis=visual,
+        partial_report=True,
+    )
+    pdf = render_pdf_report(
+        product,
+        references,
+        analysis,
+        "Interpretación prudente basada en Python.",
+        None,
+        visual_analysis=visual,
+        partial_report=True,
+    )
+    extracted = extract_text(BytesIO(pdf))
+
+    assert "Informe técnico parcial" in markdown
+    assert "Valoración del asesor comercial no disponible" in markdown
+    assert "Precio calculado: 50.00 EUR" in markdown
+    assert "Maxland" in markdown
+    assert "Informe técnico parcial" in extracted
+    assert "Valoración del asesor comercial no disponible" in extracted
+    assert "50.00 €" in extracted
+    assert "Maxland" in extracted

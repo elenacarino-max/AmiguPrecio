@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from amiguprecio.agents import (
     CommercialAssessment,
+    CommercialAssessmentSubmissionTool,
     MCPReferenceSearchTool,
     PricingAnalysisTool,
     create_agents,
@@ -330,13 +331,14 @@ def run_advisor_agent(
         ensure_ascii=False,
     )
     vision_instruction = (
-        " Usa analyze_uploaded_amigurumi_image exactamente una vez. Limita las "
+        " Usa primero analyze_uploaded_amigurumi_image exactamente una vez. Limita las "
         "observaciones visuales a su resultado; si falla, continúa con los datos no "
         "visuales e incluye esa limitación. Las limitaciones visuales significan solo "
         "que un dato no puede inferirse de la foto: no declares desconocido un coste, "
-        "precio o margen que sí figure en el resultado oficial de Python."
+        "precio o margen que sí figure en el resultado oficial de Python. Después "
+        "entrega la valoración con submit_commercial_assessment."
         if use_vision
-        else ""
+        else " Usa submit_commercial_assessment exactamente una vez para entregar el resultado."
     )
     task = Task(
         description=(
@@ -346,14 +348,25 @@ def run_advisor_agent(
             "posicionamiento premium. El margen objetivo no determina posicionamiento. "
             "Los precios anunciados no prueban ventas ni demanda. No recomiendes mantener "
             "un precio actual que la persona no haya aportado. Si la comparabilidad es "
-            "insuficiente, indica que no puede determinarse el posicionamiento. Devuelve "
-            "solo JSON válido con comparability, market_position, recommendation y "
-            "limitations; limitations debe ser siempre un array JSON de cadenas."
+            "insuficiente, indica que no puede determinarse el posicionamiento. La entrega "
+            "final debe contener comparability, market_position, recommendation y "
+            "limitations; limitations debe ser siempre un array de cadenas. No uses "
+            "output_pydantic ni añadas campos."
             f"{vision_instruction}"
         ),
         expected_output="JSON textual compatible con CommercialAssessment.",
         agent=advisor,
     )
+    submission_tool = next(
+        (
+            tool
+            for tool in advisor.tools
+            if isinstance(tool, CommercialAssessmentSubmissionTool)
+        ),
+        None,
+    )
+    if submission_tool is not None:
+        submission_tool.reset_result()
     output = Crew(
         agents=[advisor],
         tasks=[task],
@@ -361,7 +374,11 @@ def run_advisor_agent(
         output_log_file=output_log_file,
         verbose=False,
     ).kickoff()
-    assessment = validate_commercial_assessment(output.raw)
+    assessment = (
+        submission_tool.last_result
+        if submission_tool is not None and submission_tool.last_result is not None
+        else validate_commercial_assessment(output.raw)
+    )
     ensure_assessment_uses_authoritative_numbers(
         assessment, analysis.model_dump(mode="json")
     )

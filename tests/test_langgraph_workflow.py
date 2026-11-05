@@ -172,6 +172,9 @@ def test_graph_interrupts_and_resumes_same_thread_without_repeating_work(tmp_pat
     graph, config, interrupted = _start(runtime, tmp_path, "approval-flow")
 
     assert interrupted["__interrupt__"]
+    approval_request = interrupted["__interrupt__"][0].value
+    assert approval_request["report_kind"] == "full"
+    assert approval_request["question"] == "¿Apruebas la generación del informe de AmiguPrecio?"
     snapshot = graph.get_state(config)
     assert snapshot.next == ("approval",)
     assert snapshot.values["review_status"] == "approved"
@@ -283,6 +286,75 @@ def test_advisor_can_retry_once_without_repeating_prior_stages(tmp_path) -> None
     assert any("contrato JSON incompleto" in error for error in snapshot["errors"])
 
 
+def test_second_invalid_advisor_output_offers_explicit_partial_report(tmp_path) -> None:
+    runtime = FakeRuntime(advisor_failures=2)
+    graph, config, interrupted = _start(runtime, tmp_path, "partial-advisor")
+
+    assert interrupted["__interrupt__"]
+    approval_request = interrupted["__interrupt__"][0].value
+    assert approval_request["report_kind"] == "partial"
+    assert "informe técnico parcial" in approval_request["question"]
+    snapshot = graph.get_state(config)
+    values = snapshot.values
+    assert snapshot.next == ("approval",)
+    assert values["review_status"] == "partial"
+    assert values["report_kind"] == "partial"
+    assert values["commercial_assessment"] is None
+    assert values["deterministic_analysis"]["pricing"]["calculated_price"] == "81.25"
+    assert runtime.research_calls == runtime.calculation_calls == 1
+    assert runtime.analyst_calls == 1
+    assert runtime.advisor_calls == 2
+
+    completed = graph.invoke(Command(resume={"approved": True}), config)
+    content = Path(completed["report_path"]).read_text(encoding="utf-8")
+
+    assert completed["report_status"] == "saved"
+    assert completed["human_decision"] == "approved"
+    assert "Informe técnico parcial" in content
+    assert "valoración del asesor comercial no está disponible" in content.casefold()
+    assert "Precio calculado: 81.25 EUR" in content
+    assert "https://example.com/verified-doll" in content
+    assert runtime.research_calls == runtime.calculation_calls == 1
+    assert runtime.advisor_calls == 2
+
+    calls_before_pdf = (
+        runtime.research_calls,
+        runtime.calculation_calls,
+        runtime.analyst_calls,
+        runtime.advisor_calls,
+    )
+    pdf = render_pdf_report(
+        PricingInput.model_validate(completed["product"]),
+        ReferenceSearchResult.model_validate(completed["references"]),
+        DeterministicAnalysis.model_validate(completed["deterministic_analysis"]),
+        completed["analyst_observations"],
+        None,
+        partial_report=True,
+    )
+
+    assert pdf.startswith(b"%PDF-")
+    assert (
+        runtime.research_calls,
+        runtime.calculation_calls,
+        runtime.analyst_calls,
+        runtime.advisor_calls,
+    ) == calls_before_pdf
+
+
+def test_partial_report_can_be_rejected_without_saving(tmp_path) -> None:
+    runtime = FakeRuntime(advisor_failures=2)
+    graph, config, interrupted = _start(runtime, tmp_path, "partial-rejected")
+
+    assert interrupted["report_kind"] == "partial"
+    completed = graph.invoke(Command(resume={"approved": False}), config)
+
+    assert completed["human_decision"] == "rejected"
+    assert completed["report_status"] == "not_saved"
+    assert completed["report_path"] is None
+    assert runtime.report_calls == 0
+    assert not (tmp_path / "report.md").exists()
+
+
 def test_unrecoverable_research_error_is_partial_and_never_interrupts(tmp_path) -> None:
     runtime = FakeRuntime(research_error=True)
     graph = build_amiguprecio_graph(runtime.services())
@@ -349,4 +421,5 @@ def test_visual_result_is_checkpointed_and_included_in_approved_report(tmp_path)
         "deterministic_analysis",
         "human_decision",
         "report_status",
+        "report_kind",
     }

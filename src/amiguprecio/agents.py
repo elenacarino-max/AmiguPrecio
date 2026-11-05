@@ -276,22 +276,138 @@ class AssessmentValidationError(ValueError):
     """La valoración del asesor no cumple el contrato verificable."""
 
 
-def validate_commercial_assessment(raw_output: str) -> CommercialAssessment:
-    """Extrae un único contrato válido sin aceptar datos comerciales no tipados."""
+_ASSESSMENT_FIELDS = {
+    "comparability",
+    "market_position",
+    "recommendation",
+    "limitations",
+}
 
-    text = raw_output.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+class AssessmentOutputDiagnostics(BaseModel):
+    """Metadatos seguros del contrato; nunca conserva el contenido del asesor."""
+
+    output_type: str
+    length: int
+    json_object_count: int
+    detected_keys: list[str]
+    missing_fields: list[str]
+    reason: str
+
+    def safe_summary(self) -> str:
+        keys = ",".join(self.detected_keys) or "ninguna"
+        missing = ",".join(self.missing_fields) or "ninguno"
+        return (
+            f"tipo={self.output_type}; longitud={self.length}; "
+            f"objetos_json={self.json_object_count}; claves={keys}; "
+            f"faltan={missing}; motivo={self.reason}"
+        )
+
+
+def _decoded_json_values(text: str) -> list[object]:
     decoder = json.JSONDecoder()
-    candidates: list[CommercialAssessment] = []
-    validation_errors: list[Exception] = []
+    values: list[object] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        marker = repr(value)
+        if marker in seen:
+            return
+        seen.add(marker)
+        values.append(value)
+        if isinstance(value, dict):
+            for nested in value.values():
+                add(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                add(nested)
+        elif isinstance(value, str):
+            nested_text = value.strip()
+            if nested_text.startswith(("{", "[")):
+                try:
+                    add(json.loads(nested_text))
+                except json.JSONDecodeError:
+                    pass
+
     for position, character in enumerate(text):
-        if character != "{":
+        if character not in "[{":
             continue
         try:
             value, _ = decoder.raw_decode(text[position:])
         except json.JSONDecodeError:
+            continue
+        add(value)
+    return values
+
+
+def diagnose_commercial_assessment_output(raw_output: object) -> AssessmentOutputDiagnostics:
+    """Clasifica una salida sin registrar texto, secretos ni razonamiento."""
+
+    output_type = type(raw_output).__name__
+    if not isinstance(raw_output, str):
+        return AssessmentOutputDiagnostics(
+            output_type=output_type,
+            length=0,
+            json_object_count=0,
+            detected_keys=[],
+            missing_fields=sorted(_ASSESSMENT_FIELDS),
+            reason="tipo_no_textual",
+        )
+    text = raw_output.strip()
+    if not text:
+        return AssessmentOutputDiagnostics(
+            output_type=output_type,
+            length=0,
+            json_object_count=0,
+            detected_keys=[],
+            missing_fields=sorted(_ASSESSMENT_FIELDS),
+            reason="respuesta_vacia",
+        )
+    mappings = [value for value in _decoded_json_values(text) if isinstance(value, dict)]
+    detected_keys = sorted(
+        {str(key) for value in mappings for key in value if isinstance(key, str)}
+    )
+    closest = max(
+        mappings,
+        key=lambda value: len(_ASSESSMENT_FIELDS & set(value)),
+        default={},
+    )
+    missing = sorted(_ASSESSMENT_FIELDS - set(closest))
+    if not mappings:
+        opens = text.count("{") + text.count("[")
+        closes = text.count("}") + text.count("]")
+        reason = "json_truncado" if opens > closes else "texto_sin_json"
+    elif missing:
+        reason = "campos_ausentes"
+    else:
+        reason = "tipos_o_campos_invalidos"
+    return AssessmentOutputDiagnostics(
+        output_type=output_type,
+        length=len(text),
+        json_object_count=len(mappings),
+        detected_keys=detected_keys,
+        missing_fields=missing,
+        reason=reason,
+    )
+
+
+def validate_commercial_assessment(raw_output: object) -> CommercialAssessment:
+    """Extrae un único contrato válido sin aceptar datos comerciales no tipados."""
+
+    diagnostics = diagnose_commercial_assessment_output(raw_output)
+    if not isinstance(raw_output, str):
+        raise AssessmentValidationError(
+            "La salida del asesor no contiene un CommercialAssessment JSON completo "
+            f"({diagnostics.safe_summary()})"
+        )
+    text = raw_output.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    candidates: list[CommercialAssessment] = []
+    validation_errors: list[Exception] = []
+    for value in _decoded_json_values(text):
+        if not isinstance(value, dict):
             continue
         try:
             candidate = CommercialAssessment.model_validate(value)
@@ -309,11 +425,36 @@ def validate_commercial_assessment(raw_output: str) -> CommercialAssessment:
         )
     cause = validation_errors[-1] if validation_errors else None
     error = AssessmentValidationError(
-        "La salida del asesor no contiene un CommercialAssessment JSON completo"
+        "La salida del asesor no contiene un CommercialAssessment JSON completo "
+        f"({diagnostics.safe_summary()})"
     )
     if cause is not None:
         raise error from cause
     raise error
+
+
+class CommercialAssessmentSubmissionTool(BaseTool):
+    """Entrega final tipada del asesor sin Instructor ni reconstrucción posterior."""
+
+    name: str = "submit_commercial_assessment"
+    description: str = (
+        "Entrega exactamente una valoración comercial final con comparability, "
+        "market_position, recommendation y limitations."
+    )
+    args_schema: type[BaseModel] = CommercialAssessment
+    result_as_answer: bool = True
+    _last_result: CommercialAssessment | None = PrivateAttr(default=None)
+
+    @property
+    def last_result(self) -> CommercialAssessment | None:
+        return self._last_result
+
+    def reset_result(self) -> None:
+        self._last_result = None
+
+    def _run(self, **kwargs: object) -> dict[str, object]:
+        self._last_result = CommercialAssessment.model_validate(kwargs)
+        return self._last_result.model_dump(mode="json")
 
 
 _DECIMAL_CLAIM = re.compile(r"(?<![\d.])\d+[.,]\d{2}(?!\d)")
@@ -453,6 +594,7 @@ def create_agents(
         )
     )
     research_tool = research_tool or MCPReferenceSearchTool()
+    assessment_submission_tool = CommercialAssessmentSubmissionTool()
     researcher = Agent(
         role="Investigador de mercado de amigurumis",
         goal="Obtener hasta tres referencias comerciales verificables y distinguir datos en directo de guardados.",
@@ -479,10 +621,10 @@ def create_agents(
         role="Asesor comercial de producto artesanal",
         goal="Evaluar comparabilidad y redactar una valoración estructurada sin inventar demanda ni ventas.",
         backstory="Asesor escéptico que explicita limitaciones y evita conclusiones cuando faltan datos.",
-        tools=[vision_tool] if vision_tool else [],
+        tools=[tool for tool in (vision_tool, assessment_submission_tool) if tool],
         llm=advisor_llm,
         allow_delegation=False,
-        max_iter=2 if vision_tool else 1,
+        max_iter=3 if vision_tool else 2,
         max_retry_limit=0,
         verbose=False,
     )
@@ -519,8 +661,8 @@ def create_crew(llm: LLM | None = None, output_log_file: str | None = None) -> C
             "No declares posicionamiento premium por superar una media pequeña, no relaciones "
             "margen con posicionamiento, no infieras ventas o demanda y no recomiendes mantener "
             "un precio actual no aportado. "
-            "Devuelve solamente JSON válido, sin Markdown, con las claves comparability, "
-            "market_position, recommendation y limitations."
+            "Usa submit_commercial_assessment exactamente una vez para entregar las claves "
+            "comparability, market_position, recommendation y limitations."
         ),
         expected_output="Objeto JSON textual que cumpla el contrato CommercialAssessment.",
         agent=advisor,

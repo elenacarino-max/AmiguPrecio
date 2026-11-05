@@ -133,18 +133,34 @@ def render_markdown_report(
     references: ReferenceSearchResult,
     analysis: DeterministicAnalysis,
     analyst_observations: str,
-    assessment: CommercialAssessment,
+    assessment: CommercialAssessment | None,
     *,
     pricing_currency: str = "EUR",
     visual_analysis: VisualAnalysis | None = None,
     visual_error: str | None = None,
+    partial_report: bool = False,
 ) -> str:
     """Renderiza el informe usando Python como única fuente monetaria oficial."""
 
     pricing = analysis.pricing
     lines = [
-        f"# Informe de precio — {product.product_name}",
+        (
+            f"# Informe técnico parcial de precio — {product.product_name}"
+            if partial_report
+            else f"# Informe de precio — {product.product_name}"
+        ),
         "",
+        *(
+            [
+                (
+                    "**Informe parcial aprobado:** la valoración del asesor comercial no está "
+                    "disponible. Los resultados deterministas y las fuentes se conservan."
+                ),
+                "",
+            ]
+            if partial_report
+            else []
+        ),
         "## Identificación",
         "",
         f"- Producto: {product.product_name}",
@@ -252,17 +268,22 @@ def render_markdown_report(
             "",
             "## Valoración comercial",
             "",
-            f"- Comparabilidad: {assessment.comparability}",
-            f"- Posición de mercado: {assessment.market_position}",
-            f"- Recomendación: {assessment.recommendation}",
-            "",
-            "## Limitaciones y alcance",
-            "",
         ]
     )
+    if assessment is not None:
+        lines.extend(
+            [
+                f"- Comparabilidad: {assessment.comparability}",
+                f"- Posición de mercado: {assessment.market_position}",
+                f"- Recomendación: {assessment.recommendation}",
+            ]
+        )
+    else:
+        lines.append("**Valoración del asesor comercial no disponible**.")
+    lines.extend(["", "## Limitaciones y alcance", ""])
     presented_limitations = collect_presented_limitations(
         comparison.limitations,
-        assessment.limitations,
+        assessment.limitations if assessment is not None else [],
         visual_analysis.limitations if visual_analysis is not None else [],
         product=product,
     )
@@ -301,11 +322,12 @@ def render_pdf_report(
     references: ReferenceSearchResult,
     analysis: DeterministicAnalysis,
     analyst_observations: str,
-    assessment: CommercialAssessment,
+    assessment: CommercialAssessment | None,
     *,
     pricing_currency: str = "EUR",
     visual_analysis: VisualAnalysis | None = None,
     visual_error: str | None = None,
+    partial_report: bool = False,
 ) -> bytes:
     """Genera un PDF A4 en memoria desde resultados oficiales ya aprobados."""
 
@@ -317,7 +339,11 @@ def render_pdf_report(
         leftMargin=1.7 * cm,
         topMargin=1.8 * cm,
         bottomMargin=1.7 * cm,
-        title=f"AmiguPrecio - {product.product_name}",
+        title=(
+            f"AmiguPrecio - Informe técnico parcial - {product.product_name}"
+            if partial_report
+            else f"AmiguPrecio - {product.product_name}"
+        ),
         author="AmiguPrecio",
     )
     palette = {
@@ -371,8 +397,20 @@ def render_pdf_report(
     story: list[object] = [
         Paragraph("AmiguPrecio", title),
         _pdf_paragraph(product.product_name, subtitle),
-        Paragraph("Datos del producto", heading),
     ]
+    if partial_report:
+        story.extend(
+            [
+                Paragraph("Informe técnico parcial", heading),
+                Paragraph(
+                    "Valoración del asesor comercial no disponible. Este informe conserva "
+                    "únicamente resultados deterministas y fuentes verificadas, aprobados "
+                    "expresamente por la persona usuaria.",
+                    body,
+                ),
+            ]
+        )
+    story.append(Paragraph("Datos del producto", heading))
     height = f"{product.height_cm:.2f} cm" if product.height_cm is not None else "No indicada"
     product_rows = [
         ["Producto", product.product_name, "Tipo", product.product_type],
@@ -542,16 +580,30 @@ def render_pdf_report(
         [
             Paragraph("Interpretación del analista", heading),
             _pdf_paragraph(analyst_observations, body),
-            Paragraph("Valoración comercial validada", heading),
-            _pdf_paragraph(f"Comparabilidad: {assessment.comparability}", body),
-            _pdf_paragraph(f"Posición de mercado: {assessment.market_position}", body),
-            _pdf_paragraph(f"Recomendación: {assessment.recommendation}", body),
-            Paragraph("Limitaciones y alcance", heading),
+            Paragraph(
+                "Valoración comercial validada"
+                if assessment is not None
+                else "Valoración comercial",
+                heading,
+            ),
         ]
     )
+    if assessment is not None:
+        story.extend(
+            [
+                _pdf_paragraph(f"Comparabilidad: {assessment.comparability}", body),
+                _pdf_paragraph(f"Posición de mercado: {assessment.market_position}", body),
+                _pdf_paragraph(f"Recomendación: {assessment.recommendation}", body),
+            ]
+        )
+    else:
+        story.append(
+            Paragraph("Valoración del asesor comercial no disponible.", body)
+        )
+    story.append(Paragraph("Limitaciones y alcance", heading))
     limitations = collect_presented_limitations(
         comparison.limitations,
-        assessment.limitations,
+        assessment.limitations if assessment is not None else [],
         visual_analysis.limitations if visual_analysis is not None else [],
         product=product,
     )
@@ -582,7 +634,12 @@ def render_pdf_report(
         )
         canvas.setFont("Helvetica", 7.5)
         canvas.setFillColor(palette["green"])
-        canvas.drawString(1.7 * cm, 0.9 * cm, "AmiguPrecio · informe aprobado")
+        footer_label = (
+            "AmiguPrecio · informe técnico parcial aprobado"
+            if partial_report
+            else "AmiguPrecio · informe aprobado"
+        )
+        canvas.drawString(1.7 * cm, 0.9 * cm, footer_label)
         canvas.drawRightString(page_width - 1.7 * cm, 0.9 * cm, f"Página {doc.page}")
         canvas.restoreState()
 
