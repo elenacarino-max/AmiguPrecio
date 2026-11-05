@@ -19,4 +19,5 @@ def test_streamlit_initial_form_is_complete_and_does_not_call_providers() -> Non
         "Precio por hora (€)",
         "Otros gastos (€)",
         "Margen sobre ventas (%)",
+        "Altura del amigurumi (cm)",
     }

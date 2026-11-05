@@ -98,11 +98,26 @@ def _product_kind(value: str) -> str | None:
     return None
 
 
-def _size_in_cm(value: str | None) -> Decimal | None:
+def _height_in_cm(value: str | None) -> Decimal | None:
+    """Extrae solo alturas inequívocas; no interpreta listas de dimensiones."""
+
     if not value:
         return None
-    match = re.search(r"\b(\d+(?:[.,]\d+)?)\s*cm\b", _normalized(value))
-    return Decimal(match.group(1).replace(",", ".")) if match else None
+    normalized = _normalized(value).strip()
+    if " x " in normalized or re.search(r"\d\s*[x×]\s*\d", normalized):
+        return None
+    single = re.fullmatch(r"(\d+(?:[.,]\d+)?)\s*cm", normalized)
+    if single:
+        return Decimal(single.group(1).replace(",", "."))
+    labelled = re.search(
+        r"(?:altura|alto|height|high|tall)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*cm\b|"
+        r"\b(\d+(?:[.,]\d+)?)\s*cm\s*(?:de\s+alto|high|tall)\b",
+        normalized,
+    )
+    if labelled:
+        raw_value = labelled.group(1) or labelled.group(2)
+        return Decimal(raw_value.replace(",", "."))
+    return None
 
 
 def evaluate_commercial_comparability(
@@ -117,7 +132,7 @@ def evaluate_commercial_comparability(
     ]
     target_text = f"{product.product_name} {product.product_type}"
     target_kind = _product_kind(target_text)
-    target_size = _size_in_cm(target_text)
+    target_height = product.height_cm
     target_features = _tokens(target_text) - _GENERIC_TERMS
     results: list[ReferenceComparability] = []
 
@@ -134,7 +149,7 @@ def evaluate_commercial_comparability(
             )
         )
         reference_kind = _product_kind(reference_text)
-        reference_size = _size_in_cm(reference.size)
+        reference_height = _height_in_cm(reference.size)
         reference_features = _tokens(reference_text) - _GENERIC_TERMS
 
         if target_kind and reference_kind and target_kind != reference_kind:
@@ -143,29 +158,25 @@ def evaluate_commercial_comparability(
         elif target_kind is None or reference_kind is None:
             status = "undetermined"
             reason = "No hay información suficiente para contrastar el tipo de producto."
-        elif target_size is None or reference_size is None:
+        elif target_height is None or reference_height is None:
             status = "undetermined"
-            reason = "Falta el tamaño del producto o de la referencia."
-        elif target_size != reference_size:
+            reason = "Falta una altura inequívoca del producto o de la referencia."
+        elif target_height != reference_height:
             status = "not_comparable"
-            reason = "El tamaño publicado no coincide con el producto valorado."
+            reason = "La altura publicada no coincide con el producto valorado."
         elif not (target_features & reference_features):
             status = "undetermined"
             reason = "No hay características descriptivas suficientes para una comparación directa."
         else:
             status = "comparable"
-            reason = "Coinciden tipo, tamaño publicado y al menos una característica descriptiva."
-        results.append(
-            ReferenceComparability(title=reference.title, status=status, reason=reason)
-        )
+            reason = "Coinciden tipo, altura publicada y al menos una característica descriptiva."
+        results.append(ReferenceComparability(title=reference.title, status=status, reason=reason))
 
     directly_comparable = sum(item.status == "comparable" for item in results)
     not_comparable = sum(item.status == "not_comparable" for item in results)
     undetermined = sum(item.status == "undetermined" for item in results)
     categories = {
-        _normalized(reference.category)
-        for reference in same_currency
-        if reference.category
+        _normalized(reference.category) for reference in same_currency if reference.category
     }
     heterogeneous = len(categories) > 1 or not_comparable > 0 or undetermined > 0
     limitations: list[str] = []
@@ -176,12 +187,10 @@ def evaluate_commercial_comparability(
         )
     if undetermined:
         limitations.append(
-            "Faltan datos de tamaño o características para confirmar comparaciones directas."
+            "Faltan datos inequívocos de altura o características para confirmar comparaciones directas."
         )
     if not_comparable:
-        limitations.append(
-            "La muestra contiene productos de tipo o tamaño no equivalente."
-        )
+        limitations.append("La muestra contiene productos de tipo o altura no equivalente.")
     if 0 < directly_comparable < 3:
         limitations.append(
             "La muestra comercialmente comparable es demasiado pequeña para inferir posicionamiento."
@@ -241,7 +250,14 @@ def create_price_chart(
     same_currency = [
         reference for reference in references if reference.currency == calculated_currency
     ]
-    labels = [reference.title[:28] for reference in same_currency] + ["Precio calculado"]
+    labels = [
+        (
+            reference.source_name
+            if reference.title.startswith(("http://", "https://"))
+            else reference.title
+        )[:28]
+        for reference in same_currency
+    ] + ["Precio calculado"]
     values = [float(reference.price) for reference in same_currency] + [
         float(pricing.calculated_price)
     ]

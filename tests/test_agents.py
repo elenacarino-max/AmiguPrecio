@@ -294,6 +294,25 @@ def test_invalid_advisor_json_is_rejected() -> None:
         raise AssertionError("La valoración incompleta debía rechazarse")
 
 
+def test_advisor_contract_is_extracted_from_tool_output_without_relaxing_schema() -> None:
+    agents_module = importlib.import_module("amiguprecio.agents")
+    raw_output = """Resultado de analyze_uploaded_amigurumi_image:
+    {"status": "completed", "analysis": {"apparent_type": "muñeca"}}
+    Valoración final:
+    {
+      "comparability": "Insuficiente por falta de equivalencia descriptiva",
+      "market_position": "No determinable",
+      "recommendation": "Reunir referencias equivalentes",
+      "limitations": ["La muestra es heterogénea"]
+    }
+    """
+
+    assessment = agents_module.validate_commercial_assessment(raw_output)
+
+    assert assessment.market_position == "No determinable"
+    assert assessment.limitations == ["La muestra es heterogénea"]
+
+
 def test_advisor_cannot_replace_python_price_8125_with_7800() -> None:
     agents_module = importlib.import_module("amiguprecio.agents")
     assessment = agents_module.CommercialAssessment(

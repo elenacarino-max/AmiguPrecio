@@ -5,7 +5,7 @@ from pathlib import Path
 
 from langgraph.types import Command
 
-from amiguprecio.agents import CommercialAssessment
+from amiguprecio.agents import AssessmentValidationError, CommercialAssessment
 from amiguprecio.langgraph_workflow import (
     AmiguPrecioGraphState,
     WorkflowServices,
@@ -14,7 +14,7 @@ from amiguprecio.langgraph_workflow import (
 )
 from amiguprecio.models import PricingInput
 from amiguprecio.references import MarketReference, ReferenceSearchResult
-from amiguprecio.reporting import save_markdown_report
+from amiguprecio.reporting import render_pdf_report, save_markdown_report
 from amiguprecio.vision import VisualAnalysis
 from amiguprecio.workflow import DeterministicAnalysis, run_deterministic_analysis
 
@@ -117,7 +117,7 @@ class FakeRuntime:
     ) -> CommercialAssessment:
         self.advisor_calls += 1
         if self.advisor_calls <= self.advisor_failures:
-            raise ValueError("salida controlada inválida")
+            raise AssessmentValidationError("contrato JSON incompleto")
         assert analysis.pricing.production_cost == 65
         assert observations
         assert pricing_currency == "EUR"
@@ -193,6 +193,28 @@ def test_graph_interrupts_and_resumes_same_thread_without_repeating_work(tmp_pat
     assert completed["research_attempts"] == 1
     assert completed["calculation_attempts"] == 1
 
+    calls_before_pdf = (
+        runtime.research_calls,
+        runtime.calculation_calls,
+        runtime.analyst_calls,
+        runtime.advisor_calls,
+    )
+    pdf = render_pdf_report(
+        PricingInput.model_validate(completed["product"]),
+        ReferenceSearchResult.model_validate(completed["references"]),
+        DeterministicAnalysis.model_validate(completed["deterministic_analysis"]),
+        completed["analyst_observations"],
+        CommercialAssessment.model_validate(completed["commercial_assessment"]),
+    )
+
+    assert pdf.startswith(b"%PDF-")
+    assert (
+        runtime.research_calls,
+        runtime.calculation_calls,
+        runtime.analyst_calls,
+        runtime.advisor_calls,
+    ) == calls_before_pdf
+
 
 def test_rejection_ends_without_saving_report(tmp_path) -> None:
     runtime = FakeRuntime()
@@ -258,6 +280,7 @@ def test_advisor_can_retry_once_without_repeating_prior_stages(tmp_path) -> None
     assert snapshot["advisor_attempts"] == 2
     assert snapshot["analyst_attempts"] == 1
     assert runtime.research_calls == runtime.calculation_calls == 1
+    assert any("contrato JSON incompleto" in error for error in snapshot["errors"])
 
 
 def test_unrecoverable_research_error_is_partial_and_never_interrupts(tmp_path) -> None:
@@ -289,7 +312,7 @@ def test_approved_report_preserves_official_values_sources_and_limitations(tmp_p
     assert "No existe una muestra de referencias en EUR" in content
     assert "https://example.com/verified-doll" in content
     assert "Tienda verificable" in content
-    assert "No hay referencias comparables en EUR" in content
+    assert "Comparabilidad y muestra:" in content
 
 
 def test_visual_result_is_checkpointed_and_included_in_approved_report(tmp_path) -> None:
@@ -317,7 +340,8 @@ def test_visual_result_is_checkpointed_and_included_in_approved_report(tmp_path)
 
     assert "## Análisis visual" in content
     assert "qwen/qwen3.8-27b" in content
-    assert content.count("no permite conocer el material exacto") == 1
+    assert content.count("Análisis visual:") == 1
+    assert "no confirma composición, calidad ni seguridad" in content
     assert runtime.research_calls == runtime.calculation_calls == 1
     assert AmiguPrecioGraphState.__required_keys__ >= {
         "product",

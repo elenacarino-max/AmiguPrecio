@@ -21,6 +21,7 @@ dependencies = [
   # CrewAI 1.15.x fija Pydantic <2.13; 2.12 mantiene la API v2 usada aqui.
   "pydantic>=2.12,<2.13",
   "python-dotenv>=1.1,<2",
+  "reportlab>=4.4,<5",
   "streamlit>=1.66,<2",
 ]
 

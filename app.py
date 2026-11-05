@@ -7,10 +7,21 @@ from pathlib import Path
 import streamlit as st
 from pydantic import ValidationError
 
+from amiguprecio.agents import CommercialAssessment
 from amiguprecio.app_runtime import WorkflowExecution
 from amiguprecio.models import PricingInput
-from amiguprecio.reporting import collect_presented_limitations
-from amiguprecio.vision import ImageValidationError, prepare_uploaded_image
+from amiguprecio.references import ReferenceSearchResult
+from amiguprecio.reporting import (
+    can_download_approved_report,
+    collect_presented_limitations,
+    render_pdf_report,
+)
+from amiguprecio.vision import (
+    ImageValidationError,
+    VisualAnalysis,
+    prepare_uploaded_image,
+)
+from amiguprecio.workflow import DeterministicAnalysis
 
 OUTPUT_ROOT = Path("output/streamlit")
 STAGE_LABELS = {
@@ -92,7 +103,7 @@ def _render_results(execution: WorkflowExecution) -> None:
     metric_cols[2].metric("Precio calculado", f"{float(pricing['calculated_price']):.2f} €")
     metric_cols[3].metric("Margen", f"{float(pricing['margin_percent']):.2f} %")
 
-    left, right = st.columns([1.05, .95], gap="large")
+    left, right = st.columns([1.05, 0.95], gap="large")
     with left:
         st.subheader("Comparación comercial")
         if statistics["valid_reference_count"]:
@@ -118,9 +129,7 @@ def _render_results(execution: WorkflowExecution) -> None:
     with right:
         st.subheader("Referencias y procedencia")
         reference_result = values.get("references") or {}
-        comparison_by_title = {
-            item["title"]: item for item in comparison.get("references", [])
-        }
+        comparison_by_title = {item["title"]: item for item in comparison.get("references", [])}
         for reference in reference_result.get("references", []):
             checked = str(reference["checked_at"]).split("T")[0]
             st.markdown(
@@ -136,9 +145,7 @@ def _render_results(execution: WorkflowExecution) -> None:
                     "not_comparable": "No comparable",
                     "undetermined": "Comparabilidad no determinable",
                 }[reference_comparison["status"]]
-                st.write(
-                    f"**{status_label}:** {reference_comparison['reason']}"
-                )
+                st.write(f"**{status_label}:** {reference_comparison['reason']}")
         if reference_result.get("used_fallback"):
             st.caption("Dataset local de respaldo; no es una búsqueda web en directo.")
 
@@ -166,6 +173,7 @@ def _render_results(execution: WorkflowExecution) -> None:
         comparison.get("limitations", []),
         assessment.get("limitations", []) if assessment else [],
         visual.get("limitations", []) if visual else [],
+        product=PricingInput.model_validate(values["product"]),
     )
     if limitations:
         with st.expander(f"Limitaciones y alcance ({len(limitations)})"):
@@ -184,7 +192,9 @@ def _render_results(execution: WorkflowExecution) -> None:
             unsafe_allow_html=True,
         )
         approve_col, reject_col = st.columns(2)
-        if approve_col.button("Aprobar y generar informe", type="primary", use_container_width=True):
+        if approve_col.button(
+            "Aprobar y generar informe", type="primary", use_container_width=True
+        ):
             execution.resume(True)
             st.rerun()
         if reject_col.button("Rechazar informe", use_container_width=True):
@@ -192,18 +202,47 @@ def _render_results(execution: WorkflowExecution) -> None:
             st.rerun()
 
     values = execution.values
-    if values.get("report_status") == "saved":
+    if can_download_approved_report(values):
         st.success("Informe aprobado y guardado. El flujo no se ha vuelto a ejecutar.")
         report_path = Path(values["report_path"])
         chart_path = Path(values["chart_path"])
-        download_cols = st.columns(2)
+        pdf_bytes = render_pdf_report(
+            PricingInput.model_validate(values["product"]),
+            ReferenceSearchResult.model_validate(values["references"]),
+            DeterministicAnalysis.model_validate(values["deterministic_analysis"]),
+            str(values["analyst_observations"]),
+            CommercialAssessment.model_validate(values["commercial_assessment"]),
+            pricing_currency=str(values["pricing_currency"]),
+            visual_analysis=(
+                VisualAnalysis.model_validate(values["visual_analysis"])
+                if values.get("visual_analysis") is not None
+                else None
+            ),
+            visual_error=(
+                str(values["visual_error"]) if values.get("visual_error") is not None else None
+            ),
+        )
+        download_cols = st.columns(3)
         download_cols[0].download_button(
-            "Descargar informe Markdown", report_path.read_bytes(),
-            file_name=report_path.name, mime="text/markdown", use_container_width=True,
+            "Descargar informe Markdown",
+            report_path.read_bytes(),
+            file_name=report_path.name,
+            mime="text/markdown",
+            use_container_width=True,
         )
         download_cols[1].download_button(
-            "Descargar gráfico PNG", chart_path.read_bytes(),
-            file_name=chart_path.name, mime="image/png", use_container_width=True,
+            "Descargar gráfico PNG",
+            chart_path.read_bytes(),
+            file_name=chart_path.name,
+            mime="image/png",
+            use_container_width=True,
+        )
+        download_cols[2].download_button(
+            "Descargar informe PDF",
+            pdf_bytes,
+            file_name="informe-amiguprecio.pdf",
+            mime="application/pdf",
+            use_container_width=True,
         )
     elif values.get("human_decision") == "rejected":
         st.info("Informe rechazado: no se ha guardado ni repetido el análisis.")
@@ -217,7 +256,8 @@ st.title("Pon precio a tu amigurumi con datos y criterio")
 st.markdown(
     '<p class="intro">Calcula un precio sostenible, compáralo con productos terminados '
     "en euros y obtén una lectura comercial asistida por tres agentes. Tú decides si el "
-    "informe se guarda.</p>", unsafe_allow_html=True,
+    "informe se guarda.</p>",
+    unsafe_allow_html=True,
 )
 
 execution: WorkflowExecution | None = st.session_state.get("workflow_execution")
@@ -229,6 +269,13 @@ if execution is None:
             product_name = st.text_input("Nombre del amigurumi", placeholder="Luna")
         with identity_right:
             product_type = st.text_input("Tipo o categoría", placeholder="Muñeca amigurumi")
+            height_cm = st.number_input(
+                "Altura del amigurumi (cm)",
+                min_value=0.01,
+                value=None,
+                step=0.5,
+                help="Opcional. Indica la altura medida, no una estimación desde la fotografía.",
+            )
 
         cost_a, cost_b, cost_c = st.columns(3)
         with cost_a:
@@ -239,31 +286,43 @@ if execution is None:
             other_expenses = st.number_input("Otros gastos (€)", min_value=0.0, step=0.50)
         with cost_c:
             margin_percent = st.number_input(
-                "Margen sobre ventas (%)", min_value=0.0, max_value=99.99,
-                value=20.0, step=1.0,
+                "Margen sobre ventas (%)",
+                min_value=0.0,
+                max_value=99.99,
+                value=20.0,
+                step=1.0,
             )
             uploaded = st.file_uploader(
-                "Fotografía opcional", type=["jpg", "jpeg", "png", "webp"],
+                "Fotografía opcional",
+                type=["jpg", "jpeg", "png", "webp"],
                 help="JPEG, PNG o WebP; máximo 5 MB.",
             )
         st.markdown(
             '<p class="privacy-note">Si aportas una imagen, se valida y se elimina su EXIF '
             "antes de enviarla una vez a Groq para analizar solo rasgos visibles. No se "
-            "aceptan URLs y la imagen no se guarda en disco.</p>", unsafe_allow_html=True,
+            "aceptan URLs y la imagen no se guarda en disco.</p>",
+            unsafe_allow_html=True,
         )
         submitted = st.form_submit_button("Analizar mi amigurumi", use_container_width=True)
 
     if submitted:
         try:
             product = PricingInput(
-                product_name=product_name, product_type=product_type,
-                materials_cost=str(materials_cost), hours_worked=str(hours_worked),
-                hourly_rate=str(hourly_rate), other_expenses=str(other_expenses),
+                product_name=product_name,
+                product_type=product_type,
+                height_cm=str(height_cm) if height_cm is not None else None,
+                materials_cost=str(materials_cost),
+                hours_worked=str(hours_worked),
+                hourly_rate=str(hourly_rate),
+                other_expenses=str(other_expenses),
                 margin_percent=str(margin_percent),
             )
             prepared = prepare_uploaded_image(uploaded.getvalue()) if uploaded else None
             execution = WorkflowExecution.production(
-                product, product_type, OUTPUT_ROOT, prepared,
+                product,
+                product_type,
+                OUTPUT_ROOT,
+                prepared,
             )
             st.session_state.workflow_execution = execution
             with st.status("Ejecutando el flujo real…", expanded=True) as status:

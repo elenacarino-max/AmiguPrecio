@@ -277,18 +277,43 @@ class AssessmentValidationError(ValueError):
 
 
 def validate_commercial_assessment(raw_output: str) -> CommercialAssessment:
-    """Valida JSON textual del tercer agente sin una llamada adicional al LLM."""
+    """Extrae un único contrato válido sin aceptar datos comerciales no tipados."""
 
     text = raw_output.strip()
     if text.startswith("```"):
         lines = text.splitlines()
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    try:
-        return CommercialAssessment.model_validate_json(text)
-    except (ValidationError, ValueError) as exc:
+    decoder = json.JSONDecoder()
+    candidates: list[CommercialAssessment] = []
+    validation_errors: list[Exception] = []
+    for position, character in enumerate(text):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[position:])
+        except json.JSONDecodeError:
+            continue
+        try:
+            candidate = CommercialAssessment.model_validate(value)
+        except (ValidationError, ValueError) as exc:
+            validation_errors.append(exc)
+            continue
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
         raise AssessmentValidationError(
-            "La salida del asesor no es JSON válido para CommercialAssessment"
-        ) from exc
+            "La salida del asesor contiene varias valoraciones comerciales válidas"
+        )
+    cause = validation_errors[-1] if validation_errors else None
+    error = AssessmentValidationError(
+        "La salida del asesor no contiene un CommercialAssessment JSON completo"
+    )
+    if cause is not None:
+        raise error from cause
+    raise error
 
 
 _DECIMAL_CLAIM = re.compile(r"(?<![\d.])\d+[.,]\d{2}(?!\d)")

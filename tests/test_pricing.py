@@ -64,3 +64,17 @@ def test_rejects_empty_name() -> None:
 def test_rejects_unknown_fields() -> None:
     with pytest.raises(ValueError):
         valid_input(hidden_fee="10")
+
+
+def test_optional_height_accepts_positive_decimals_without_changing_price() -> None:
+    without_height = calculate_price(valid_input())
+    product = valid_input(height_cm="27.5")
+
+    assert product.height_cm == Decimal("27.5")
+    assert calculate_price(product) == without_height
+
+
+@pytest.mark.parametrize("height", ["0", "-1", "NaN", "Infinity"])
+def test_optional_height_rejects_non_positive_or_non_finite_values(height: str) -> None:
+    with pytest.raises(ValueError):
+        valid_input(height_cm=height)

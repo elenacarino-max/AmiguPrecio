@@ -202,10 +202,25 @@ def test_presented_limitations_are_grouped_without_mutating_sources() -> None:
     advisor = [
         "La fotografía no permite determinar el material exacto.",
         "Los precios anunciados no prueban ventas ni demanda.",
+        "La muestra comercialmente comparable es demasiado pequeña.",
+        "El margen objetivo no determina el posicionamiento de mercado.",
     ]
-    visual = ["La fotografía no permite determinar el material exacto."]
+    visual = [
+        "La fotografía no permite determinar el material exacto.",
+        "tiempo de elaboración desconocido",
+        "coste de producción desconocido",
+        "seguridad del producto no verificada",
+    ]
+    product = _pricing_input().model_copy(update={"height_cm": Decimal(30)})
 
-    presented = collect_presented_limitations(advisor, visual)
+    presented = collect_presented_limitations(advisor, visual, product=product)
 
-    assert presented == advisor
-    assert visual == ["La fotografía no permite determinar el material exacto."]
+    assert 4 <= len(presented) <= 6
+    assert sum("Análisis visual:" in item for item in presented) == 1
+    assert any("seguridad" in item.casefold() for item in presented)
+    assert any("altura indicada procede del formulario" in item for item in presented)
+    assert any(
+        "horas y los costes utilizados proceden del formulario" in item for item in presented
+    )
+    assert not any("coste de producción desconocido" in item for item in presented)
+    assert visual[-1] == "seguridad del producto no verificada"

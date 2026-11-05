@@ -67,7 +67,9 @@ def run_deterministic_analysis(
 ) -> DeterministicAnalysis:
     """Ejecuta la herramienta Python directamente, sin decisión del LLM."""
 
-    pricing_data = pricing_input.model_dump(mode="json")
+    # La altura pertenece al producto y a la comparación comercial, no al
+    # contrato monetario de la herramienta Python.
+    pricing_data = pricing_input.model_dump(mode="json", exclude={"height_cm"})
     tool_references = [
         {
             "source_url": str(reference.source_url),

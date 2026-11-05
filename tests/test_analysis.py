@@ -1,8 +1,12 @@
 from decimal import Decimal
 
 from amiguprecio import PricingInput, calculate_price
-from amiguprecio.analysis import calculate_market_statistics, create_price_chart
-from amiguprecio.references import load_saved_references
+from amiguprecio.analysis import (
+    calculate_market_statistics,
+    create_price_chart,
+    evaluate_commercial_comparability,
+)
+from amiguprecio.references import MarketReference, load_saved_references
 
 
 def pricing_result():
@@ -57,3 +61,69 @@ def test_chart_is_created(tmp_path) -> None:
 
     assert output.exists()
     assert output.stat().st_size > 1_000
+
+
+def test_height_improves_comparability_without_becoming_sufficient_alone() -> None:
+    product = PricingInput(
+        product_name="Luna",
+        product_type="Muñeca amigurumi",
+        height_cm="30",
+        materials_cost="12.50",
+        hours_worked="5",
+        hourly_rate="10",
+        other_expenses="2.50",
+        margin_percent="20",
+    )
+    reference = MarketReference.model_validate(
+        {
+            "title": "Muñeca artesanal",
+            "price": "45.00",
+            "currency": "EUR",
+            "features": [],
+            "source_url": "https://example.com/doll",
+            "checked_at": "2026-11-05T09:00:00+01:00",
+            "source_name": "Tienda",
+            "provenance": "saved",
+            "category": "muñeca",
+            "size": "30 cm",
+            "product_type": "finished_product",
+        }
+    )
+
+    result = evaluate_commercial_comparability(product, [reference])
+
+    assert result.references[0].status == "undetermined"
+    assert "características" in result.references[0].reason
+
+
+def test_multiple_unlabelled_dimensions_are_not_assumed_to_be_height() -> None:
+    product = PricingInput(
+        product_name="Luna",
+        product_type="Muñeca amigurumi",
+        height_cm="15",
+        materials_cost="12.50",
+        hours_worked="5",
+        hourly_rate="10",
+        other_expenses="2.50",
+        margin_percent="20",
+    )
+    reference = MarketReference.model_validate(
+        {
+            "title": "Muñeca artesanal",
+            "price": "45.00",
+            "currency": "EUR",
+            "features": ["muñeca"],
+            "source_url": "https://example.com/doll",
+            "checked_at": "2026-11-05T09:00:00+01:00",
+            "source_name": "Tienda",
+            "provenance": "saved",
+            "category": "muñeca",
+            "size": "15 x 9 x 9 cm",
+            "product_type": "finished_product",
+        }
+    )
+
+    result = evaluate_commercial_comparability(product, [reference])
+
+    assert result.references[0].status == "undetermined"
+    assert "altura inequívoca" in result.references[0].reason

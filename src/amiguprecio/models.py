@@ -12,6 +12,7 @@ class PricingInput(BaseModel):
 
     product_name: str = Field(min_length=1, max_length=80)
     product_type: str = Field(min_length=1, max_length=80)
+    height_cm: Decimal | None = Field(default=None, gt=0, max_digits=6, decimal_places=2)
     materials_cost: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
     hours_worked: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
     hourly_rate: Decimal = Field(ge=0, max_digits=8, decimal_places=2)
@@ -29,6 +30,13 @@ class PricingInput(BaseModel):
     def reject_non_finite_numbers(cls, value: Decimal) -> Decimal:
         if not value.is_finite():
             raise ValueError("El valor debe ser un numero finito")
+        return value
+
+    @field_validator("height_cm")
+    @classmethod
+    def reject_non_finite_height(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and not value.is_finite():
+            raise ValueError("La altura debe ser un numero finito")
         return value
 
 

@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from amiguprecio.agents import (
+    AssessmentValidationError,
     CommercialAssessment,
     MCPReferenceSearchTool,
     VisionAnalysisTool,
@@ -205,7 +206,12 @@ def initial_graph_state(
 
 
 def _with_error(state: AmiguPrecioGraphState, stage: str, exc: Exception) -> list[str]:
-    return [*state["errors"], f"{stage}: {type(exc).__name__}"]
+    detail = (
+        f": {exc}"
+        if isinstance(exc, AssessmentValidationError)
+        else ""
+    )
+    return [*state["errors"], f"{stage}: {type(exc).__name__}{detail}"]
 
 
 def _retry_or_error(
@@ -409,7 +415,11 @@ def build_amiguprecio_graph(
             return _retry_or_error(
                 state,
                 "advisor",
-                f"revisión del asesor: {type(exc).__name__}",
+                (
+                    f"revisión del asesor: {type(exc).__name__}: {exc}"
+                    if isinstance(exc, AssessmentValidationError)
+                    else f"revisión del asesor: {type(exc).__name__}"
+                ),
             )
         return {
             "commercial_assessment": validated.model_dump(mode="json"),
