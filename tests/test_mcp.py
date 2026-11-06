@@ -58,3 +58,15 @@ def test_mcp_subprocess_receives_serpapi_activation_without_logging_secret(
 
     assert environment["SERPAPI_API_KEY"] == "unit-test-secret"
     assert environment["SERPAPI_SEARCH_ENABLED"] == "true"
+
+
+def test_disabled_mcp_subprocess_does_not_receive_serpapi_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SERPAPI_API_KEY", "unit-test-secret")
+    monkeypatch.setenv("SERPAPI_SEARCH_ENABLED", "false")
+
+    environment = _mcp_server_environment()
+
+    assert environment["SERPAPI_SEARCH_ENABLED"] == "false"
+    assert "SERPAPI_API_KEY" not in environment

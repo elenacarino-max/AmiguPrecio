@@ -357,6 +357,8 @@ def search_google_shopping(
     secret = api_key or os.getenv("SERPAPI_API_KEY")
     if not secret:
         raise SerpApiConfigurationError("SERPAPI_API_KEY no está configurada")
+    failure_message: str | None = None
+    payload: object = None
     try:
         with (
             _suppress_sensitive_http_logging(),
@@ -376,12 +378,15 @@ def search_google_shopping(
             payload = response.json()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 429:
-            raise RuntimeError("SerpApi devolvió HTTP 429; cuota o frecuencia limitada") from exc
-        raise RuntimeError(f"SerpApi devolvió HTTP {exc.response.status_code}") from exc
+            failure_message = "SerpApi devolvió HTTP 429; cuota o frecuencia limitada"
+        else:
+            failure_message = f"SerpApi devolvió HTTP {exc.response.status_code}"
     except httpx.HTTPError as exc:
-        raise RuntimeError(f"No se pudo consultar SerpApi: {type(exc).__name__}") from exc
-    except ValueError as exc:
-        raise RuntimeError("SerpApi devolvió JSON inválido") from exc
+        failure_message = f"No se pudo consultar SerpApi: {type(exc).__name__}"
+    except ValueError:
+        failure_message = "SerpApi devolvió JSON inválido"
+    if failure_message is not None:
+        raise RuntimeError(failure_message)
     if not isinstance(payload, Mapping):
         raise TypeError("SerpApi devolvió una respuesta inesperada")
     if payload.get("error"):

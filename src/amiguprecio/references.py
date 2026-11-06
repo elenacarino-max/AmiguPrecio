@@ -88,7 +88,8 @@ def search_market_candidates(
 ) -> ReferenceSearchResult:
     """Busca candidatos online y conserva las fuentes anteriores como respaldo."""
 
-    enabled = serpapi_search_enabled() if use_serpapi is None else use_serpapi
+    configured = serpapi_search_enabled()
+    enabled = configured and use_serpapi is not False
     query = build_market_query(product_name, category, height_cm)
     errors: list[str] = []
     searches_used = 0

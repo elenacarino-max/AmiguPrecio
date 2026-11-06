@@ -11,17 +11,19 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import get_default_environment, stdio_client
 
-from amiguprecio.references import ReferenceSearchResult
+from amiguprecio.references import ReferenceSearchResult, serpapi_search_enabled
 
 
 def _mcp_server_environment() -> dict[str, str]:
     """Propaga solo la configuración SerpApi necesaria además del entorno MCP seguro."""
 
     environment = get_default_environment()
-    for name in ("SERPAPI_API_KEY", "SERPAPI_SEARCH_ENABLED"):
-        value = os.getenv(name)
-        if value:
-            environment[name] = value
+    enabled_value = os.getenv("SERPAPI_SEARCH_ENABLED", "false")
+    environment["SERPAPI_SEARCH_ENABLED"] = enabled_value
+    if serpapi_search_enabled():
+        secret = os.getenv("SERPAPI_API_KEY")
+        if secret:
+            environment["SERPAPI_API_KEY"] = secret
     return environment
 
 

@@ -142,6 +142,7 @@ def test_serpapi_candidates_keep_thumbnail_provenance_and_classification(
         )
 
     monkeypatch.setenv("SERPAPI_API_KEY", "unit-test-secret")
+    monkeypatch.setenv("SERPAPI_SEARCH_ENABLED", "true")
     monkeypatch.setattr("amiguprecio.references.search_google_shopping", fake_search)
 
     result = search_market_candidates(
@@ -169,6 +170,7 @@ def test_empty_first_search_allows_only_one_broader_search(
         return ShoppingSearchResult(query=query, searches_used=1)
 
     monkeypatch.setenv("SERPAPI_API_KEY", "unit-test-secret")
+    monkeypatch.setenv("SERPAPI_SEARCH_ENABLED", "true")
     monkeypatch.setattr("amiguprecio.references.search_google_shopping", fake_search)
 
     result = search_market_candidates(
@@ -195,6 +197,28 @@ def test_disabled_serpapi_uses_existing_fallback_without_online_call(
         product_name="Hello Kitty",
         category="muñeca",
         use_serpapi=False,
+        live=False,
+    )
+
+    assert result.searches_used == 0
+    assert result.used_fallback is True
+    assert all(reference.provenance == "saved" for reference in result.references)
+
+
+def test_mcp_argument_cannot_override_disabled_serpapi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden(*args: object, **kwargs: object) -> ShoppingSearchResult:
+        raise AssertionError("El argumento MCP no debe anular el interruptor")
+
+    monkeypatch.setenv("SERPAPI_API_KEY", "unit-test-secret")
+    monkeypatch.setenv("SERPAPI_SEARCH_ENABLED", "false")
+    monkeypatch.setattr("amiguprecio.references.search_google_shopping", forbidden)
+
+    result = search_market_candidates(
+        product_name="Hello Kitty",
+        category="muñeca",
+        use_serpapi=True,
         live=False,
     )
 

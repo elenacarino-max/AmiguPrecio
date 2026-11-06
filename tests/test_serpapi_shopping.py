@@ -1,4 +1,5 @@
 import logging
+import traceback
 from datetime import datetime
 from decimal import Decimal
 
@@ -186,6 +187,76 @@ def test_sensitive_http_url_logging_is_suppressed_and_restored(
 
     assert "unit-test-secret" not in caplog.text
     assert logger.level == original_level
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("429", "HTTP 429"),
+        ("timeout", "ReadTimeout"),
+        ("network", "ConnectError"),
+        ("invalid_json", "JSON inválido"),
+    ],
+)
+def test_provider_failures_never_retain_key_in_exception_or_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected: str,
+) -> None:
+    fake_key = "unit-test-secret-never-real"
+
+    def fake_get(self: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
+        request = httpx.Request("GET", url, params=kwargs["params"])
+        if failure == "429":
+            return httpx.Response(429, request=request)
+        if failure == "timeout":
+            raise httpx.ReadTimeout("timeout", request=request)
+        if failure == "network":
+            raise httpx.ConnectError("offline", request=request)
+        return httpx.Response(200, request=request, content=b"not-json")
+
+    monkeypatch.setattr(httpx.Client, "get", fake_get)
+
+    with pytest.raises(RuntimeError, match=expected) as captured:
+        search_google_shopping(
+            "consulta",
+            target_theme="Hello Kitty",
+            api_key=fake_key,
+        )
+
+    rendered = "".join(
+        traceback.format_exception(
+            type(captured.value), captured.value, captured.value.__traceback__
+        )
+    )
+    assert fake_key not in str(captured.value)
+    assert fake_key not in repr(captured.value)
+    assert fake_key not in rendered
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+def test_provider_error_payload_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_key = "unit-test-secret-never-real"
+
+    def fake_get(self: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
+        request = httpx.Request("GET", url, params=kwargs["params"])
+        return httpx.Response(
+            200,
+            request=request,
+            json={"error": f"invalid api_key {fake_key}"},
+        )
+
+    monkeypatch.setattr(httpx.Client, "get", fake_get)
+
+    with pytest.raises(RuntimeError, match="error de proveedor") as captured:
+        search_google_shopping(
+            "consulta",
+            target_theme="Hello Kitty",
+            api_key=fake_key,
+        )
+
+    assert fake_key not in str(captured.value)
 
 
 def test_real_cases_are_ranked_by_theme_and_duplicate_offers_are_removed() -> None:
