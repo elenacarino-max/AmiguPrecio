@@ -108,6 +108,8 @@ def test_tool_schema_uses_simple_decimal_strings_for_groq() -> None:
         "currency",
         "checked_at",
         "provenance",
+        "title",
+        "source_name",
     }
     assert set(reference_schema["properties"]) == set(reference_schema["required"])
     assert reference_price["type"] == "string"
