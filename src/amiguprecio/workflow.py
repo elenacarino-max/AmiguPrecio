@@ -73,6 +73,8 @@ def run_deterministic_analysis(
     pricing_data = pricing_input.model_dump(mode="json", exclude={"height_cm"})
     tool_references = [
         {
+            "title": reference.title,
+            "source_name": reference.source_name,
             "source_url": str(reference.source_url),
             "price": str(reference.price),
             "currency": reference.currency,

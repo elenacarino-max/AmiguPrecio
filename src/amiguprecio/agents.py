@@ -60,6 +60,8 @@ class ToolMarketReference(BaseModel):
     source_url: str
     checked_at: str
     provenance: Literal["live", "saved", "serpapi_google_shopping"]
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    source_name: str | None = Field(default=None, min_length=1, max_length=100)
 
     @field_validator("price")
     @classmethod
@@ -80,12 +82,12 @@ class ToolMarketReference(BaseModel):
         if not source_host:
             raise ValueError("No se pudo identificar la fuente de la referencia")
         return MarketReference(
-            title=self.source_url,
+            title=self.title or source_host,
             price=_parse_finite_decimal(self.price, positive=True),
             currency=self.currency,
             source_url=self.source_url,
             checked_at=self.checked_at,
-            source_name=source_host,
+            source_name=self.source_name or source_host,
             provenance=self.provenance,
         )
 
