@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp.client.stdio import get_default_environment, stdio_client
 
 from amiguprecio.references import ReferenceSearchResult
+
+
+def _mcp_server_environment() -> dict[str, str]:
+    """Propaga solo la configuración SerpApi necesaria además del entorno MCP seguro."""
+
+    environment = get_default_environment()
+    for name in ("SERPAPI_API_KEY", "SERPAPI_SEARCH_ENABLED"):
+        value = os.getenv(name)
+        if value:
+            environment[name] = value
+    return environment
 
 
 async def search_references_mcp(
@@ -18,6 +30,10 @@ async def search_references_mcp(
     max_results: int = 3,
     live: bool = True,
     currency: str | None = None,
+    product_name: str | None = None,
+    category: str | None = None,
+    height_cm: str | None = None,
+    use_serpapi: bool | None = None,
     timeout_seconds: float = 15.0,
 ) -> ReferenceSearchResult:
     """Lanza el servidor stdio, negocia MCP y llama a su herramienta."""
@@ -27,6 +43,7 @@ async def search_references_mcp(
         command=sys.executable,
         args=["-m", "amiguprecio.mcp_server"],
         cwd=project_root,
+        env=_mcp_server_environment(),
     )
 
     async def _call() -> ReferenceSearchResult:
@@ -38,14 +55,24 @@ async def search_references_mcp(
             tools = await session.list_tools()
             if not any(tool.name == "search_market_references" for tool in tools.tools):
                 raise RuntimeError("El servidor MCP no expone la herramienta esperada")
+            arguments: dict[str, object] = {
+                "query": query,
+                "max_results": min(max_results, 10),
+                "live": live,
+                "currency": currency,
+            }
+            optional_arguments = {
+                "product_name": product_name,
+                "category": category,
+                "height_cm": height_cm,
+                "use_serpapi": use_serpapi,
+            }
+            arguments.update(
+                {key: value for key, value in optional_arguments.items() if value is not None}
+            )
             result = await session.call_tool(
                 "search_market_references",
-                {
-                    "query": query,
-                    "max_results": min(max_results, 3),
-                    "live": live,
-                    "currency": currency,
-                },
+                arguments,
             )
             if result.isError:
                 raise RuntimeError("La herramienta MCP devolvió un error")
@@ -68,6 +95,10 @@ def search_references_mcp_sync(
     max_results: int = 3,
     live: bool = True,
     currency: str | None = None,
+    product_name: str | None = None,
+    category: str | None = None,
+    height_cm: str | None = None,
+    use_serpapi: bool | None = None,
 ) -> ReferenceSearchResult:
     return asyncio.run(
         search_references_mcp(
@@ -75,5 +106,9 @@ def search_references_mcp_sync(
             max_results=max_results,
             live=live,
             currency=currency,
+            product_name=product_name,
+            category=category,
+            height_cm=height_cm,
+            use_serpapi=use_serpapi,
         )
     )

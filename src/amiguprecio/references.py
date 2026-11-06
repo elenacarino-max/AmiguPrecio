@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import os
 import unicodedata
 from datetime import datetime
 from decimal import Decimal
@@ -11,6 +12,8 @@ from typing import Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+
+from amiguprecio.serpapi_shopping import search_google_shopping
 
 SHOP_URL = "https://sweetlavenderco.com"
 LIVE_ENDPOINT = f"{SHOP_URL}/collections/amigurumi-toys/products.json"
@@ -27,10 +30,13 @@ class MarketReference(BaseModel):
     source_url: HttpUrl
     checked_at: datetime
     source_name: str = Field(min_length=1, max_length=100)
-    provenance: Literal["live", "saved"]
+    provenance: Literal["live", "saved", "serpapi_google_shopping"]
     category: str | None = None
     size: str | None = None
     product_type: str | None = None
+    thumbnail_url: HttpUrl | None = None
+    comparability_status: Literal["comparable", "not_comparable", "undetermined"] | None = None
+    comparability_reason: str | None = None
 
     @field_validator("price")
     @classmethod
@@ -42,9 +48,125 @@ class MarketReference(BaseModel):
 
 class ReferenceSearchResult(BaseModel):
     query: str
-    references: list[MarketReference] = Field(default_factory=list, max_length=3)
+    references: list[MarketReference] = Field(default_factory=list, max_length=10)
     errors: list[str] = Field(default_factory=list)
     used_fallback: bool = False
+    searches_used: int = Field(default=0, ge=0, le=2)
+
+
+def serpapi_search_enabled() -> bool:
+    """Permite volver al comportamiento anterior mediante configuración."""
+
+    return os.getenv("SERPAPI_SEARCH_ENABLED", "false").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def build_market_query(
+    product_name: str,
+    category: str,
+    height_cm: Decimal | None = None,
+) -> str:
+    parts = [product_name.strip(), category.strip(), "amigurumi crochet producto terminado"]
+    if height_cm is not None:
+        parts.append(f"{height_cm.normalize()} cm")
+    return " ".join(part for part in parts if part)
+
+
+def search_market_candidates(
+    *,
+    product_name: str,
+    category: str,
+    height_cm: Decimal | None = None,
+    currency: str = "EUR",
+    max_results: int = 10,
+    live: bool = True,
+    use_serpapi: bool | None = None,
+) -> ReferenceSearchResult:
+    """Busca candidatos online y conserva las fuentes anteriores como respaldo."""
+
+    enabled = serpapi_search_enabled() if use_serpapi is None else use_serpapi
+    query = build_market_query(product_name, category, height_cm)
+    errors: list[str] = []
+    searches_used = 0
+    if enabled:
+        if not os.getenv("SERPAPI_API_KEY"):
+            errors.append("SerpApi no está configurada; se utilizaron las fuentes de respaldo.")
+        else:
+            try:
+                searches_used += 1
+                online = search_google_shopping(
+                    query,
+                    target_theme=product_name,
+                    target_height_cm=height_cm,
+                )
+                if not online.products:
+                    broader_query = f"{product_name.strip()} amigurumi crochet terminado"
+                    searches_used += 1
+                    online = search_google_shopping(
+                        broader_query,
+                        target_theme=product_name,
+                        target_height_cm=height_cm,
+                    )
+                comparison_by_title = {
+                    item.title: item for item in online.comparability
+                }
+                references = []
+                for product in online.products:
+                    if product.currency != currency.upper():
+                        continue
+                    comparison = comparison_by_title[product.title]
+                    references.append(
+                        MarketReference(
+                            title=product.title,
+                            price=product.price,
+                            currency=product.currency,
+                            features=(
+                                ["declarado como hecho a mano"]
+                                if product.handmade_claimed
+                                else []
+                            ),
+                            source_url=product.url,
+                            checked_at=product.checked_at,
+                            source_name=product.store,
+                            provenance="serpapi_google_shopping",
+                            category=category,
+                            size=product.size,
+                            product_type=product.product_type,
+                            thumbnail_url=product.thumbnail_url,
+                            comparability_status=comparison.status,
+                            comparability_reason=comparison.reason,
+                        )
+                    )
+                if references:
+                    return ReferenceSearchResult(
+                        query=query,
+                        references=references[: min(max(max_results, 1), 10)],
+                        searches_used=searches_used,
+                    )
+                errors.append(
+                    f"SerpApi no devolvió candidatos válidos en {currency.upper()}."
+                )
+            except RuntimeError as exc:
+                errors.append(f"SerpApi no disponible: {exc}")
+
+    fallback = search_references(
+        f"{product_name} {category}",
+        max_results=min(max(max_results, 1), 3),
+        live=live,
+        currency=currency,
+    )
+    return fallback.model_copy(
+        update={
+            "query": query,
+            "errors": [*errors, *fallback.errors],
+            "used_fallback": True,
+            "searches_used": searches_used,
+        }
+    )
 
 
 def load_saved_references(

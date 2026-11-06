@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from decimal import Decimal
 
@@ -6,9 +7,11 @@ import pytest
 
 from amiguprecio.serpapi_shopping import (
     SerpApiConfigurationError,
+    _suppress_sensitive_http_logging,
     calculate_shopping_statistics,
     classify_comparability,
     parse_shopping_results,
+    rank_and_deduplicate_products,
     search_google_shopping,
 )
 
@@ -35,13 +38,17 @@ def test_parser_keeps_only_unambiguous_finished_products() -> None:
             _record(title="Patrón PDF Hello Kitty amigurumi", product_link="https://x.test/1"),
             _record(title="Kit crochet Hello Kitty", product_link="https://x.test/2"),
             _record(title="Llavero amigurumi Hello Kitty", product_link="https://x.test/3"),
+            _record(
+                title="Pack Hello Kitty 99, My Melody y Amigurumi",
+                product_link="https://x.test/pack",
+            ),
             _record(price="Desde 12 €", extracted_price=12, product_link="https://x.test/4"),
         ]
     }
 
     raw_count, products = parse_shopping_results(payload, checked_at=CHECKED_AT)
 
-    assert raw_count == 5
+    assert raw_count == 6
     assert len(products) == 1
     assert products[0].price == Decimal("49.90")
     assert products[0].currency == "EUR"
@@ -165,3 +172,47 @@ def test_request_uses_spain_spanish_and_one_call(monkeypatch: pytest.MonkeyPatch
     }
     assert result.searches_used == 1
     assert result.api_product_count == 1
+
+
+def test_sensitive_http_url_logging_is_suppressed_and_restored(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("httpx")
+    original_level = logger.level
+    with caplog.at_level(
+        logging.INFO, logger="httpx"
+    ), _suppress_sensitive_http_logging():
+        logger.info("https://serpapi.com/search.json?api_key=unit-test-secret")
+
+    assert "unit-test-secret" not in caplog.text
+    assert logger.level == original_level
+
+
+def test_real_cases_are_ranked_by_theme_and_duplicate_offers_are_removed() -> None:
+    payload = {
+        "shopping_results": [
+            _record(
+                title="Peluche de gato de ganchillo hecho a mano amigurumi",
+                product_link="https://x.test/generic",
+            ),
+            _record(product_id="hello-kitty-1"),
+            _record(
+                product_id="hello-kitty-1",
+                source="Otra oferta del mismo producto",
+                product_link="https://x.test/duplicate",
+            ),
+            _record(
+                title="Hello Kitty amigurumi hecho a mano 25 cm",
+                source="Artesanía Ejemplo",
+                extracted_price=49.9,
+                product_link="https://x.test/same-offer",
+            ),
+        ]
+    }
+    _, parsed = parse_shopping_results(payload, checked_at=CHECKED_AT)
+
+    products = rank_and_deduplicate_products(parsed, target_theme="Hello Kitty")
+
+    assert len(products) == 2
+    assert products[0].title.startswith("Hello Kitty")
+    assert products[1].title.startswith("Peluche de gato")

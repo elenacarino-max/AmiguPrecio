@@ -4,7 +4,7 @@ from pdfminer.high_level import extract_text
 
 from amiguprecio.agents import CommercialAssessment
 from amiguprecio.models import PricingInput
-from amiguprecio.references import ReferenceSearchResult, load_saved_references
+from amiguprecio.references import MarketReference, ReferenceSearchResult, load_saved_references
 from amiguprecio.reporting import (
     can_download_approved_report,
     render_markdown_report,
@@ -134,3 +134,57 @@ def test_partial_markdown_and_pdf_are_explicit_and_keep_verified_data(tmp_path) 
     assert "Valoración del asesor comercial no disponible" in extracted
     assert "50.00 €" in extracted
     assert "Maxland" in extracted
+
+
+def test_online_candidates_are_labelled_in_markdown_and_pdf(tmp_path) -> None:
+    product, _, _, assessment, visual = _approved_report_data(tmp_path)
+    reference = MarketReference(
+        title="Hello Kitty amigurumi sin altura publicada",
+        price="22.90",
+        currency="EUR",
+        source_url="https://www.google.com/shopping/product/123",
+        checked_at="2026-11-05T12:00:00+01:00",
+        source_name="Tienda ejemplo",
+        provenance="serpapi_google_shopping",
+        product_type="finished_product",
+        thumbnail_url="https://images.example.com/kitty.webp",
+        comparability_status="undetermined",
+        comparability_reason="La publicación no aporta una altura inequívoca.",
+    )
+    references = ReferenceSearchResult(
+        query="Hello Kitty muñeca amigurumi crochet producto terminado 25 cm",
+        references=[reference],
+        searches_used=1,
+    )
+    analysis = run_deterministic_analysis(
+        product,
+        references.references,
+        chart_path=tmp_path / "online-candidates.png",
+    )
+
+    markdown = render_markdown_report(
+        product,
+        references,
+        analysis,
+        "Interpretación prudente basada en Python.",
+        assessment,
+        visual_analysis=visual,
+    )
+    extracted = extract_text(
+        BytesIO(
+            render_pdf_report(
+                product,
+                references,
+                analysis,
+                "Interpretación prudente basada en Python.",
+                assessment,
+                visual_analysis=visual,
+            )
+        )
+    )
+
+    assert "Google Shopping vía SerpApi (agregador)" in markdown
+    assert "No determinable" in markdown
+    assert "No existe una media de productos equivalentes" in markdown
+    assert "Google Shopping vía SerpApi" in extracted
+    assert "No determinable" in extracted

@@ -59,7 +59,7 @@ class ToolMarketReference(BaseModel):
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     source_url: str
     checked_at: str
-    provenance: Literal["live", "saved"]
+    provenance: Literal["live", "saved", "serpapi_google_shopping"]
 
     @field_validator("price")
     @classmethod
@@ -175,9 +175,13 @@ class PricingAnalysisTool(BaseTool):
 
 class MCPReferenceSearchInput(BaseModel):
     query: str
-    max_results: int = Field(default=3, ge=1, le=3)
+    max_results: int = Field(default=3, ge=1, le=10)
     live: bool = False
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    product_name: str | None = None
+    category: str | None = None
+    height_cm: str | None = None
+    use_serpapi: bool | None = None
 
 
 class MCPReferenceSearchTool(BaseTool):
@@ -198,12 +202,22 @@ class MCPReferenceSearchTool(BaseTool):
 
     def _run(self, **kwargs: object) -> dict:
         tool_input = MCPReferenceSearchInput.model_validate(kwargs)
-        self._last_result = search_references_mcp_sync(
-            query=tool_input.query,
-            max_results=tool_input.max_results,
-            live=tool_input.live,
-            currency=tool_input.currency,
+        arguments: dict[str, object] = {
+            "query": tool_input.query,
+            "max_results": tool_input.max_results,
+            "live": tool_input.live,
+            "currency": tool_input.currency,
+        }
+        optional_arguments = {
+            "product_name": tool_input.product_name,
+            "category": tool_input.category,
+            "height_cm": tool_input.height_cm,
+            "use_serpapi": tool_input.use_serpapi,
+        }
+        arguments.update(
+            {key: value for key, value in optional_arguments.items() if value is not None}
         )
+        self._last_result = search_references_mcp_sync(**arguments)
         return self._last_result.model_dump(mode="json")
 
 

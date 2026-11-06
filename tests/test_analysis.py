@@ -96,6 +96,46 @@ def test_height_improves_comparability_without_becoming_sufficient_alone() -> No
     assert "características" in result.references[0].reason
 
 
+def test_general_sample_and_comparable_statistics_remain_separate() -> None:
+    product = PricingInput(
+        product_name="Hello Kitty",
+        product_type="Muñeca amigurumi",
+        height_cm="25",
+        materials_cost="10",
+        hours_worked="1.5",
+        hourly_rate="20",
+        margin_percent="20",
+    )
+    comparable = MarketReference(
+        title="Hello Kitty artesanal 25 cm",
+        price="40.00",
+        currency="EUR",
+        source_url="https://example.com/comparable",
+        checked_at="2026-11-05T12:00:00+01:00",
+        source_name="Tienda A",
+        provenance="serpapi_google_shopping",
+        product_type="finished_product",
+        comparability_status="comparable",
+        comparability_reason="Coinciden tipo, tema, altura y fabricación declarada.",
+    )
+    undetermined = comparable.model_copy(
+        update={
+            "title": "Hello Kitty sin altura",
+            "price": Decimal(20),
+            "source_url": "https://example.com/unknown",
+            "comparability_status": "undetermined",
+            "comparability_reason": "La publicación no aporta una altura inequívoca.",
+        }
+    )
+
+    comparison = evaluate_commercial_comparability(product, [comparable, undetermined])
+
+    assert comparison.directly_comparable_count == 1
+    assert comparison.undetermined_count == 1
+    assert comparison.comparable_mean == Decimal("40.00")
+    assert comparison.comparable_median == Decimal("40.00")
+
+
 def test_multiple_unlabelled_dimensions_are_not_assumed_to_be_height() -> None:
     product = PricingInput(
         product_name="Luna",

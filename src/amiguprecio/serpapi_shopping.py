@@ -6,10 +6,12 @@ que AmiguPrecio haya verificado directamente la ficha de la tienda ni que exista
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
@@ -19,6 +21,21 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
 SERPAPI_PROVENANCE = "serpapi_google_shopping"
+
+
+@contextmanager
+def _suppress_sensitive_http_logging() -> Iterator[None]:
+    """Evita que el parámetro de autenticación aparezca en logs de URL."""
+
+    loggers = [logging.getLogger("httpx"), logging.getLogger("httpcore")]
+    previous_levels = [logger.level for logger in loggers]
+    try:
+        for logger in loggers:
+            logger.setLevel(logging.WARNING)
+        yield
+    finally:
+        for logger, level in zip(loggers, previous_levels, strict=True):
+            logger.setLevel(level)
 
 
 class SerpApiConfigurationError(RuntimeError):
@@ -42,6 +59,7 @@ class ShoppingProduct(BaseModel):
     size: str | None = None
     height_cm: Decimal | None = Field(default=None, gt=0, decimal_places=2)
     handmade_claimed: bool = False
+    provider_product_id: str | None = None
 
     @field_validator("price", "height_cm")
     @classmethod
@@ -81,6 +99,7 @@ _EXCLUDED_TERMS = {
     "clothes",
     "clothing",
     "outfit",
+    "pack",
     "keychain",
     "llavero",
     "kit",
@@ -88,6 +107,14 @@ _EXCLUDED_TERMS = {
     "patron",
     "pdf",
     "tutorial",
+}
+_INDUSTRIAL_TERMS = {
+    "funko",
+    "lego",
+    "plastic",
+    "plastico",
+    "vinyl",
+    "vinilo",
 }
 _FINISHED_SIGNALS = {
     "amigurumi",
@@ -128,7 +155,7 @@ def _product_text(record: Mapping[str, Any]) -> str:
 def _is_finished_product(record: Mapping[str, Any]) -> bool:
     text = _normalized(_product_text(record))
     terms = _words(text)
-    if terms & _EXCLUDED_TERMS:
+    if terms & (_EXCLUDED_TERMS | _INDUSTRIAL_TERMS):
         return False
     return any(signal in text for signal in _FINISHED_SIGNALS)
 
@@ -208,9 +235,45 @@ def parse_shopping_results(
             size=size,
             height_cm=height,
             handmade_claimed=any(signal in text for signal in _HANDMADE_SIGNALS),
+            provider_product_id=(
+                str(raw["product_id"]).strip() if raw.get("product_id") else None
+            ),
         )
         products.append(product)
     return len(raw_results), products
+
+
+def rank_and_deduplicate_products(
+    products: list[ShoppingProduct], *, target_theme: str, limit: int = 10
+) -> list[ShoppingProduct]:
+    """Prioriza el personaje solicitado y elimina ofertas repetidas de forma estable."""
+
+    theme_terms = _words(target_theme)
+    ranked: list[tuple[int, int, ShoppingProduct]] = []
+    seen_product_ids: set[str] = set()
+    seen_offers: set[tuple[object, ...]] = set()
+    for position, product in enumerate(products):
+        offer_identity = (
+            _normalized(product.title),
+            _normalized(product.store),
+            product.price,
+            product.currency,
+        )
+        if (
+            product.provider_product_id in seen_product_ids
+            if product.provider_product_id
+            else False
+        ) or offer_identity in seen_offers:
+            continue
+        if product.provider_product_id:
+            seen_product_ids.add(product.provider_product_id)
+        seen_offers.add(offer_identity)
+        terms = _words(product.title)
+        theme_score = 4 if theme_terms and theme_terms.issubset(terms) else 0
+        evidence_score = int(product.height_cm is not None) + int(product.handmade_claimed)
+        ranked.append((theme_score + evidence_score, position, product))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in ranked[: min(max(limit, 1), 10)]]
 
 
 def classify_comparability(
@@ -295,7 +358,10 @@ def search_google_shopping(
     if not secret:
         raise SerpApiConfigurationError("SERPAPI_API_KEY no está configurada")
     try:
-        with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+        with (
+            _suppress_sensitive_http_logging(),
+            httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client,
+        ):
             response = client.get(
                 SERPAPI_ENDPOINT,
                 params={
@@ -309,6 +375,8 @@ def search_google_shopping(
             response.raise_for_status()
             payload = response.json()
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            raise RuntimeError("SerpApi devolvió HTTP 429; cuota o frecuencia limitada") from exc
         raise RuntimeError(f"SerpApi devolvió HTTP {exc.response.status_code}") from exc
     except httpx.HTTPError as exc:
         raise RuntimeError(f"No se pudo consultar SerpApi: {type(exc).__name__}") from exc
@@ -318,7 +386,12 @@ def search_google_shopping(
         raise TypeError("SerpApi devolvió una respuesta inesperada")
     if payload.get("error"):
         raise RuntimeError("SerpApi devolvió un error de proveedor")
-    raw_count, products = parse_shopping_results(payload)
+    raw_count, parsed_products = parse_shopping_results(payload)
+    products = rank_and_deduplicate_products(
+        parsed_products,
+        target_theme=target_theme,
+        limit=10,
+    )
     comparisons = classify_comparability(
         products,
         target_theme=target_theme,

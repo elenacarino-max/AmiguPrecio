@@ -35,6 +35,22 @@ def _table_text(value: object | None) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
+def _source_label(provenance: str) -> str:
+    return {
+        "serpapi_google_shopping": "Google Shopping vía SerpApi (agregador)",
+        "live": "Catálogo directo SweetLavenderCo",
+        "saved": "Catálogo local guardado",
+    }.get(provenance, provenance)
+
+
+def _comparison_label(status: str | None) -> str:
+    return {
+        "comparable": "Comparable",
+        "not_comparable": "No comparable",
+        "undetermined": "No determinable",
+    }.get(status, "No evaluada")
+
+
 def collect_presented_limitations(
     *groups: list[str], product: PricingInput | None = None
 ) -> list[str]:
@@ -143,6 +159,8 @@ def render_markdown_report(
     """Renderiza el informe usando Python como única fuente monetaria oficial."""
 
     pricing = analysis.pricing
+    comparison = analysis.commercial_comparability
+    comparison_statuses = {item.title: item.status for item in comparison.references}
     lines = [
         (
             f"# Informe técnico parcial de precio — {product.product_name}"
@@ -183,14 +201,14 @@ def render_markdown_report(
         f"- Beneficio bruto: {pricing.gross_profit:.2f} {pricing_currency}",
         f"- Margen: {pricing.margin_percent:.2f} %",
         "",
-        "## Referencias comerciales",
+        "## Referencias comerciales online y guardadas",
         "",
     ]
     if references.references:
         lines.extend(
             [
-                "| Producto | Precio | Moneda | Tienda | Procedencia | Consulta | Fuente |",
-                "|---|---:|:---:|---|:---:|:---:|---|",
+                "| Producto | Precio | Moneda | Tienda | Procedencia | Comparabilidad | Consulta | Fuente |",
+                "|---|---:|:---:|---|---|---|:---:|---|",
             ]
         )
         for reference in references.references:
@@ -202,7 +220,14 @@ def render_markdown_report(
                         f"{reference.price:.2f}",
                         _table_text(reference.currency),
                         _table_text(reference.source_name),
-                        _table_text(reference.provenance),
+                        _table_text(_source_label(reference.provenance)),
+                        _table_text(
+                            _comparison_label(
+                                comparison_statuses.get(
+                                    reference.title, reference.comparability_status
+                                )
+                            )
+                        ),
                         reference.checked_at.date().isoformat(),
                         f"[enlace]({reference.source_url})",
                     ]
@@ -229,7 +254,6 @@ def render_markdown_report(
                 f"- Mediana de la muestra: {analysis.statistics.median:.2f} {pricing_currency}",
             ]
         )
-    comparison = analysis.commercial_comparability
     lines.extend(
         [
             f"- Comparables directamente: {comparison.directly_comparable_count}",
@@ -238,6 +262,16 @@ def render_markdown_report(
             f"- Conclusión: {comparison.conclusion}",
         ]
     )
+    if comparison.comparable_mean is not None:
+        lines.append(
+            "- Media de productos directamente comparables: "
+            f"{comparison.comparable_mean:.2f} {pricing_currency}"
+        )
+    else:
+        lines.append(
+            "- No existe una media de productos equivalentes; los precios de los candidatos "
+            "son únicamente orientativos."
+        )
 
     lines.extend(["", "## Análisis visual", ""])
     if visual_analysis is not None:
@@ -474,10 +508,14 @@ def render_pdf_report(
             ]
         )
     )
-    story.extend([pricing_table, Paragraph("Referencias comerciales", heading)])
+    comparison = analysis.commercial_comparability
+    comparison_statuses = {item.title: item.status for item in comparison.references}
+    story.extend(
+        [pricing_table, Paragraph("Referencias comerciales online y guardadas", heading)]
+    )
     if references.references:
         reference_rows: list[list[object]] = [
-            ["Producto", "Precio", "Fuente", "Consulta", "Origen"]
+            ["Producto", "Precio", "Fuente", "Consulta", "Origen", "Comparabilidad"]
         ]
         for reference in references.references:
             source_url = escape(str(reference.source_url), quote=True)
@@ -491,12 +529,17 @@ def render_pdf_report(
                     _pdf_money(reference.price, reference.currency),
                     source,
                     reference.checked_at.date().isoformat(),
-                    reference.provenance,
+                    _source_label(reference.provenance),
+                    _comparison_label(
+                        comparison_statuses.get(
+                            reference.title, reference.comparability_status
+                        )
+                    ),
                 ]
             )
         reference_table = Table(
             reference_rows,
-            colWidths=[5.7 * cm, 2.4 * cm, 4.2 * cm, 2.4 * cm, 1.7 * cm],
+            colWidths=[4.3 * cm, 1.8 * cm, 3.2 * cm, 1.9 * cm, 2.8 * cm, 2.4 * cm],
             repeatRows=1,
         )
         reference_table.setStyle(
@@ -540,8 +583,23 @@ def render_pdf_report(
                 body,
             )
         )
-    comparison = analysis.commercial_comparability
     story.append(_pdf_paragraph(comparison.conclusion, body))
+    if comparison.comparable_mean is not None:
+        story.append(
+            _pdf_paragraph(
+                "Media de productos directamente comparables: "
+                + _pdf_money(comparison.comparable_mean, pricing_currency),
+                body,
+            )
+        )
+    else:
+        story.append(
+            Paragraph(
+                "No existe una media de productos equivalentes; los precios encontrados "
+                "son información orientativa.",
+                body,
+            )
+        )
     chart_path = Path(analysis.chart_path)
     if chart_path.is_file():
         chart = ReportLabImage(str(chart_path), width=15.8 * cm, height=8.9 * cm)

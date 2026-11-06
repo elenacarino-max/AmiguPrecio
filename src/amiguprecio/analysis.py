@@ -48,6 +48,9 @@ class CommercialComparability(BaseModel):
     conclusion: str
     limitations: list[str]
     references: list[ReferenceComparability]
+    comparable_mean: Decimal | None = None
+    comparable_median: Decimal | None = None
+    comparable_currency: str | None = None
 
 
 _TYPE_GROUPS = {
@@ -152,7 +155,12 @@ def evaluate_commercial_comparability(
         reference_height = _height_in_cm(reference.size)
         reference_features = _tokens(reference_text) - _GENERIC_TERMS
 
-        if target_kind and reference_kind and target_kind != reference_kind:
+        if reference.comparability_status is not None:
+            status = reference.comparability_status
+            reason = reference.comparability_reason or (
+                "Clasificación determinista conservada desde la fuente de descubrimiento."
+            )
+        elif target_kind and reference_kind and target_kind != reference_kind:
             status = "not_comparable"
             reason = "El tipo de producto no coincide con el producto valorado."
         elif target_kind is None or reference_kind is None:
@@ -207,6 +215,25 @@ def evaluate_commercial_comparability(
             "Las referencias cumplen los criterios descriptivos disponibles; sus precios "
             "siguen siendo precios anunciados, no evidencia de ventas o demanda."
         )
+    comparable_prices = [
+        reference.price
+        for reference, result in zip(same_currency, results, strict=True)
+        if result.status == "comparable"
+    ]
+    comparable_mean = None
+    comparable_median = None
+    if comparable_prices:
+        comparable_mean = (
+            sum(comparable_prices) / Decimal(len(comparable_prices))
+        ).quantize(Decimal("0.01"))
+        ordered = sorted(comparable_prices)
+        midpoint = len(ordered) // 2
+        if len(ordered) % 2:
+            comparable_median = ordered[midpoint]
+        else:
+            comparable_median = (
+                (ordered[midpoint - 1] + ordered[midpoint]) / Decimal(2)
+            ).quantize(Decimal("0.01"))
     return CommercialComparability(
         currency_reference_count=len(same_currency),
         directly_comparable_count=directly_comparable,
@@ -216,6 +243,9 @@ def evaluate_commercial_comparability(
         conclusion=conclusion,
         limitations=limitations,
         references=results,
+        comparable_mean=comparable_mean,
+        comparable_median=comparable_median,
+        comparable_currency=calculated_currency if comparable_prices else None,
     )
 
 

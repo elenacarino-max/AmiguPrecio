@@ -104,6 +104,13 @@ def _render_results(execution: WorkflowExecution) -> None:
     metric_cols[3].metric("Margen", f"{float(pricing['margin_percent']):.2f} %")
 
     left, right = st.columns([1.05, 0.95], gap="large")
+    reference_result = values.get("references") or {}
+    all_references = reference_result.get("references", [])
+    online_candidates = [
+        reference
+        for reference in all_references
+        if reference.get("provenance") == "serpapi_google_shopping"
+    ]
     with left:
         st.subheader("Comparación comercial")
         if statistics["valid_reference_count"]:
@@ -119,6 +126,16 @@ def _render_results(execution: WorkflowExecution) -> None:
             f"No comparables: **{comparison['not_comparable_count']}** · "
             f"No determinables: **{comparison['undetermined_count']}**"
         )
+        if comparison.get("comparable_mean") is not None:
+            st.write(
+                "Media de productos directamente comparables: "
+                f"**{float(comparison['comparable_mean']):.2f} €**"
+            )
+        else:
+            st.info(
+                "No existe una media de productos equivalentes; los precios encontrados "
+                "se muestran únicamente como información orientativa."
+            )
         if comparison["sample_is_heterogeneous"]:
             st.warning(comparison["conclusion"])
         else:
@@ -128,9 +145,13 @@ def _render_results(execution: WorkflowExecution) -> None:
             st.image(chart_path, caption="Precio Python frente a la muestra EUR")
     with right:
         st.subheader("Referencias y procedencia")
-        reference_result = values.get("references") or {}
         comparison_by_title = {item["title"]: item for item in comparison.get("references", [])}
-        for reference in reference_result.get("references", []):
+        other_references = [
+            reference
+            for reference in all_references
+            if reference.get("provenance") != "serpapi_google_shopping"
+        ]
+        for reference in other_references:
             checked = str(reference["checked_at"]).split("T")[0]
             st.markdown(
                 f"**{reference['title']}**  \n"
@@ -148,6 +169,53 @@ def _render_results(execution: WorkflowExecution) -> None:
                 st.write(f"**{status_label}:** {reference_comparison['reason']}")
         if reference_result.get("used_fallback"):
             st.caption("Dataset local de respaldo; no es una búsqueda web en directo.")
+        elif online_candidates:
+            st.caption(
+                "Los anuncios de Google Shopping no se han verificado directamente "
+                "en la web de cada tienda."
+            )
+
+    if online_candidates:
+        st.subheader("Productos encontrados en Internet")
+        st.caption(
+            "Candidatos de Google Shopping mediante SerpApi. Sus precios son orientativos; "
+            "una coincidencia de moneda o palabras no demuestra equivalencia comercial."
+        )
+        comparison_by_title = {item["title"]: item for item in comparison.get("references", [])}
+        for start in range(0, len(online_candidates), 2):
+            candidate_columns = st.columns(2, gap="medium")
+            for column, reference in zip(
+                candidate_columns,
+                online_candidates[start : start + 2],
+                strict=False,
+            ):
+                with column.container(border=True):
+                    if reference.get("thumbnail_url"):
+                        st.image(
+                            str(reference["thumbnail_url"]),
+                            caption="Miniatura publicada en Google Shopping",
+                            width="stretch",
+                        )
+                    st.markdown(f"**{reference['title']}**")
+                    st.write(
+                        f"{float(reference['price']):.2f} {reference['currency']} · "
+                        f"{reference['source_name']}"
+                    )
+                    checked = str(reference["checked_at"]).split("T")[0]
+                    st.caption(f"Consulta: {checked} · Google Shopping vía SerpApi")
+                    candidate_comparison = comparison_by_title.get(reference["title"])
+                    if candidate_comparison:
+                        status_label = {
+                            "comparable": "Comparable directamente",
+                            "not_comparable": "No comparable",
+                            "undetermined": "Comparabilidad no determinable",
+                        }[candidate_comparison["status"]]
+                        st.write(f"**{status_label}.** {candidate_comparison['reason']}")
+                    st.link_button(
+                        "Abrir resultado original",
+                        str(reference["source_url"]),
+                        use_container_width=True,
+                    )
 
     st.subheader("Lectura de los agentes")
     st.write(values.get("analyst_observations") or "Interpretación no disponible.")

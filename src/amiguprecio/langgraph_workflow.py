@@ -20,7 +20,7 @@ from amiguprecio.agents import (
     ensure_assessment_uses_authoritative_numbers,
 )
 from amiguprecio.models import PricingInput
-from amiguprecio.references import ReferenceSearchResult
+from amiguprecio.references import ReferenceSearchResult, build_market_query
 from amiguprecio.reporting import render_markdown_report, save_markdown_report
 from amiguprecio.vision import PreparedImage, VisualAnalysis
 from amiguprecio.workflow import (
@@ -83,6 +83,7 @@ class WorkflowServices:
     advise: Callable[
         [DeterministicAnalysis, str, str], CommercialAssessment
     ]
+    research_product: Callable[[PricingInput, str], ReferenceSearchResult] | None = None
     save_report: Callable[[Path, str], Path] = save_markdown_report
     get_visual_analysis: Callable[[], VisualAnalysis | None] | None = None
     get_visual_error: Callable[[], str | None] | None = None
@@ -107,6 +108,26 @@ def create_production_services(
             research_tool,
             query,
             pricing_currency=pricing_currency,
+            output_log_file=crew_log,
+        )
+        return result
+
+    def research_product(
+        product: PricingInput, pricing_currency: str
+    ) -> ReferenceSearchResult:
+        query = build_market_query(
+            product.product_name,
+            product.product_type,
+            product.height_cm,
+        )
+        result, _ = run_research_agent(
+            researcher,
+            research_tool,
+            query,
+            pricing_currency=pricing_currency,
+            product_name=product.product_name,
+            category=product.product_type,
+            height_cm=(str(product.height_cm) if product.height_cm is not None else None),
             output_log_file=crew_log,
         )
         return result
@@ -154,6 +175,7 @@ def create_production_services(
 
     return WorkflowServices(
         research=research,
+        research_product=research_product,
         calculate=calculate,
         analyze=analyze,
         advise=advise,
@@ -281,9 +303,15 @@ def build_amiguprecio_graph(
         if state["references"] is not None:
             return {}
         try:
-            references = services.research(
-                state["query"], state["pricing_currency"]
-            )
+            if services.research_product is not None:
+                references = services.research_product(
+                    PricingInput.model_validate(state["product"]),
+                    state["pricing_currency"],
+                )
+            else:
+                references = services.research(
+                    state["query"], state["pricing_currency"]
+                )
         except Exception as exc:  # noqa: BLE001 - frontera CrewAI/MCP
             return {
                 "errors": _with_error(state, "investigación", exc),
