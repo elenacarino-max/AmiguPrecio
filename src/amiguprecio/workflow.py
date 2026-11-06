@@ -240,9 +240,13 @@ def run_research_agent(
     if product_name and category:
         tool_instruction = (
             "Usa search_market_references exactamente una vez con query={query}, "
-            "product_name={product_name}, category={category}, height_cm={height_cm}, "
-            "max_results=10, live=true y currency={pricing_currency}. "
+            "product_name={product_name}, category={category}, "
         )
+        if height_cm is not None:
+            tool_instruction += "height_cm={height_cm}, "
+        else:
+            tool_instruction += "omite por completo el argumento opcional height_cm, "
+        tool_instruction += "max_results=10, live=true y currency={pricing_currency}. "
     else:
         tool_instruction = (
             "Usa search_market_references exactamente una vez con query={query}, "
@@ -257,21 +261,21 @@ def run_research_agent(
         expected_output="Resultado JSON exacto del servidor MCP.",
         agent=researcher,
     )
+    crew_inputs = {
+        "query": query,
+        "pricing_currency": pricing_currency,
+        "product_name": product_name or query,
+        "category": category or query,
+    }
+    if height_cm is not None:
+        crew_inputs["height_cm"] = height_cm
     output = Crew(
         agents=[researcher],
         tasks=[task],
         process=Process.sequential,
         output_log_file=output_log_file,
         verbose=False,
-    ).kickoff(
-        inputs={
-            "query": query,
-            "pricing_currency": pricing_currency,
-            "product_name": product_name or query,
-            "category": category or query,
-            "height_cm": height_cm or "no indicada",
-        }
-    )
+    ).kickoff(inputs=crew_inputs)
     if research_tool.last_result is None:
         raise AgentOutputError("El investigador no ejecutó la herramienta MCP")
     return research_tool.last_result, _usage_dict(output)

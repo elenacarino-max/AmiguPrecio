@@ -105,6 +105,20 @@ def test_comparability_requires_theme_height_and_manufacturing_evidence() -> Non
     ]
 
 
+def test_missing_target_height_never_invents_size_comparability() -> None:
+    payload = {"shopping_results": [_record()]}
+    _, products = parse_shopping_results(payload, checked_at=CHECKED_AT)
+
+    comparisons = classify_comparability(
+        products,
+        target_theme="Hello Kitty",
+        target_height_cm=None,
+    )
+
+    assert comparisons[0].status == "undetermined"
+    assert "suficientes atributos" in comparisons[0].reason
+
+
 def test_statistics_separate_eur_sample_from_comparable_subset() -> None:
     payload = {
         "shopping_results": [

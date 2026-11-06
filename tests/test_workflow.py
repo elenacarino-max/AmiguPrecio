@@ -21,6 +21,7 @@ from amiguprecio.workflow import (
     analyst_payload,
     enforce_supported_commercial_assessment,
     run_deterministic_analysis,
+    run_research_agent,
     validate_analyst_observations,
 )
 
@@ -128,6 +129,67 @@ def test_research_tool_preserves_typed_mcp_result(monkeypatch) -> None:
     assert tool.last_result == expected
     assert payload["references"][0]["source_name"] == "Tienda artesanal"
     assert payload["references"][0]["source_url"] == str(reference.source_url)
+
+
+@pytest.mark.parametrize(
+    ("height_cm", "expected_height"),
+    [(None, None), ("25", "25")],
+)
+def test_research_agent_preserves_optional_height_without_inventing_text(
+    monkeypatch: pytest.MonkeyPatch,
+    height_cm: str | None,
+    expected_height: str | None,
+) -> None:
+    expected = ReferenceSearchResult(query="Hello Kitty muñeca", used_fallback=True)
+    captured_mcp: dict[str, object] = {}
+    captured_crew: dict[str, object] = {}
+
+    def fake_mcp_search(**kwargs: object) -> ReferenceSearchResult:
+        captured_mcp.update(kwargs)
+        return expected
+
+    class FakeCrew:
+        def __init__(self, **kwargs: object) -> None:
+            captured_crew["task"] = kwargs["tasks"][0]
+
+        def kickoff(self, *, inputs: dict[str, object]) -> object:
+            captured_crew["inputs"] = inputs
+            tool_arguments: dict[str, object] = {
+                "query": inputs["query"],
+                "product_name": inputs["product_name"],
+                "category": inputs["category"],
+                "max_results": 10,
+                "live": True,
+                "currency": inputs["pricing_currency"],
+            }
+            if "height_cm" in inputs:
+                tool_arguments["height_cm"] = inputs["height_cm"]
+            tool._run(**tool_arguments)
+            return object()
+
+    monkeypatch.setattr(
+        "amiguprecio.agents.search_references_mcp_sync", fake_mcp_search
+    )
+    monkeypatch.setattr("amiguprecio.workflow.Task", lambda **kwargs: kwargs)
+    monkeypatch.setattr("amiguprecio.workflow.Crew", FakeCrew)
+    tool = MCPReferenceSearchTool()
+
+    result, _ = run_research_agent(
+        object(),  # type: ignore[arg-type]
+        tool,
+        "Hello Kitty muñeca amigurumi crochet producto terminado",
+        product_name="Hello Kitty",
+        category="muñeca",
+        height_cm=height_cm,
+    )
+
+    assert result == expected
+    if expected_height is None:
+        assert "height_cm" not in captured_mcp
+    else:
+        assert captured_mcp["height_cm"] == expected_height
+    assert ("height_cm" in captured_crew["inputs"]) is (height_cm is not None)
+    assert "no indicada" not in str(captured_crew)
 
 
 def test_analyst_payload_is_short_and_preserves_control_case(tmp_path) -> None:

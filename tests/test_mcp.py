@@ -16,6 +16,28 @@ def test_stdio_client_connects_and_calls_real_tool() -> None:
     assert all(reference.provenance == "saved" for reference in result.references)
 
 
+def test_stdio_product_search_without_height_uses_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SERPAPI_API_KEY", "unit-test-secret-never-real")
+    monkeypatch.setenv("SERPAPI_SEARCH_ENABLED", "false")
+
+    result = asyncio.run(
+        search_references_mcp(
+            "Hello Kitty muñeca amigurumi crochet producto terminado",
+            product_name="Hello Kitty",
+            category="muñeca",
+            currency="EUR",
+            live=False,
+        )
+    )
+
+    assert result.used_fallback is True
+    assert result.searches_used == 0
+    assert result.references
+    assert all(reference.provenance == "saved" for reference in result.references)
+
+
 def test_mcp_contract_forwards_product_identity_to_serpapi_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -46,6 +68,42 @@ def test_mcp_contract_forwards_product_identity_to_serpapi_adapter(
     assert captured["max_results"] == 10
     assert captured["use_serpapi"] is True
     assert payload["references"] == []
+
+
+def test_mcp_contract_keeps_missing_height_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_candidates(**kwargs: object) -> ReferenceSearchResult:
+        captured.update(kwargs)
+        return ReferenceSearchResult(query="Hello Kitty muñeca")
+
+    monkeypatch.setattr(
+        "amiguprecio.mcp_server.search_market_candidates", fake_candidates
+    )
+
+    search_market_references(
+        query="Hello Kitty muñeca amigurumi crochet producto terminado",
+        product_name="Hello Kitty",
+        category="muñeca",
+        currency="EUR",
+        use_serpapi=False,
+    )
+
+    assert captured["height_cm"] is None
+
+
+@pytest.mark.parametrize("height_cm", ["no indicada", "0", "-1", "NaN"])
+def test_mcp_contract_rejects_invalid_height(height_cm: str) -> None:
+    with pytest.raises(ValueError, match="height_cm debe ser"):
+        search_market_references(
+            query="Hello Kitty muñeca amigurumi crochet producto terminado",
+            product_name="Hello Kitty",
+            category="muñeca",
+            height_cm=height_cm,
+            use_serpapi=False,
+        )
 
 
 def test_mcp_subprocess_receives_serpapi_activation_without_logging_secret(
