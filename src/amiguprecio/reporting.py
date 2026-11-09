@@ -402,11 +402,11 @@ def render_pdf_report(
         "AmiguPrecioHeading",
         parent=base["Heading2"],
         fontName="Helvetica-Bold",
-        fontSize=13,
-        leading=16,
+        fontSize=12.3,
+        leading=15,
         textColor=palette["green"],
-        spaceBefore=12,
-        spaceAfter=7,
+        spaceBefore=9,
+        spaceAfter=5,
     )
     title = ParagraphStyle(
         "AmiguPrecioTitle",
@@ -427,6 +427,13 @@ def render_pdf_report(
         spaceAfter=14,
     )
     small = ParagraphStyle("AmiguPrecioSmall", parent=body, fontSize=7.6, leading=10)
+    reference_small = ParagraphStyle(
+        "AmiguPrecioReferenceSmall",
+        parent=small,
+        fontSize=7,
+        leading=9,
+        spaceAfter=0,
+    )
 
     story: list[object] = [
         Paragraph("AmiguPrecio", title),
@@ -515,31 +522,37 @@ def render_pdf_report(
     )
     if references.references:
         reference_rows: list[list[object]] = [
-            ["Producto", "Precio", "Fuente", "Consulta", "Origen", "Comparabilidad"]
+            ["Producto", "Precio", "Fuente y consulta", "Origen", "Comparabilidad"]
         ]
         for reference in references.references:
             source_url = escape(str(reference.source_url), quote=True)
             source = Paragraph(
-                f'{escape(reference.source_name)}<br/><link href="{source_url}">Abrir fuente</link>',
-                small,
+                f'{escape(reference.source_name)} · '
+                f'{reference.checked_at.date().isoformat()}<br/>'
+                f'<link href="{source_url}">Abrir fuente</link>',
+                reference_small,
             )
             reference_rows.append(
                 [
-                    _pdf_paragraph(reference.title, small),
-                    _pdf_money(reference.price, reference.currency),
+                    _pdf_paragraph(reference.title, reference_small),
+                    _pdf_paragraph(
+                        _pdf_money(reference.price, reference.currency), reference_small
+                    ),
                     source,
-                    reference.checked_at.date().isoformat(),
-                    _source_label(reference.provenance),
-                    _comparison_label(
-                        comparison_statuses.get(
-                            reference.title, reference.comparability_status
-                        )
+                    _pdf_paragraph(_source_label(reference.provenance), reference_small),
+                    _pdf_paragraph(
+                        _comparison_label(
+                            comparison_statuses.get(
+                                reference.title, reference.comparability_status
+                            )
+                        ),
+                        reference_small,
                     ),
                 ]
             )
         reference_table = Table(
             reference_rows,
-            colWidths=[4.3 * cm, 1.8 * cm, 3.2 * cm, 1.9 * cm, 2.8 * cm, 2.4 * cm],
+            colWidths=[4.9 * cm, 1.7 * cm, 3.3 * cm, 3.9 * cm, 2.6 * cm],
             repeatRows=1,
         )
         reference_table.setStyle(
@@ -549,14 +562,14 @@ def render_pdf_report(
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                     ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+                    ("FONTSIZE", (0, 0), (-1, -1), 7),
                     ("GRID", (0, 0), (-1, -1), 0.35, palette["line"]),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("ROWBACKGROUNDS", (0, 1), (-1, -1), [palette["paper"], colors.white]),
                     ("LEFTPADDING", (0, 0), (-1, -1), 4),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                    ("TOPPADDING", (0, 0), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
                 ]
             )
         )
@@ -602,7 +615,7 @@ def render_pdf_report(
         )
     chart_path = Path(analysis.chart_path)
     if chart_path.is_file():
-        chart = ReportLabImage(str(chart_path), width=15.8 * cm, height=8.9 * cm)
+        chart = ReportLabImage(str(chart_path), width=14.8 * cm, height=8.34 * cm)
         chart.hAlign = "CENTER"
         story.extend([Spacer(1, 5), chart])
     else:
@@ -669,12 +682,14 @@ def render_pdf_report(
         story.append(_pdf_paragraph(f"- {limitation}", body))
     story.extend(
         [
-            Paragraph("Procedencia de las fuentes", heading),
             Paragraph(
-                "Las referencias guardadas son una fuente local de respaldo, no una búsqueda "
-                "web en directo. Cada referencia conserva tienda, URL, fecha de consulta y origen."
-                if references.used_fallback
-                else "Cada referencia conserva tienda, URL, fecha de consulta y procedencia.",
+                "<b>Procedencia de las fuentes:</b> "
+                + (
+                    "Las referencias guardadas son una fuente local de respaldo, no una búsqueda "
+                    "web en directo. Cada referencia conserva tienda, URL, fecha de consulta y origen."
+                    if references.used_fallback
+                    else "Cada referencia conserva tienda, URL, fecha de consulta y procedencia."
+                ),
                 body,
             ),
         ]
