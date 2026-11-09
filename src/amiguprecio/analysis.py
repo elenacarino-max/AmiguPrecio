@@ -281,12 +281,13 @@ def create_price_chart(
         reference for reference in references if reference.currency == calculated_currency
     ]
     labels = [
-        (
+        f"{index}. "
+        + (
             reference.source_name
             if reference.title.startswith(("http://", "https://"))
             else reference.title
         )[:28]
-        for reference in same_currency
+        for index, reference in enumerate(same_currency, start=1)
     ] + ["Precio calculado"]
     values = [float(reference.price) for reference in same_currency] + [
         float(pricing.calculated_price)
