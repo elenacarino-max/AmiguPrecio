@@ -44,8 +44,7 @@ flowchart LR
     HITL -->|rechazar| END[Fin sin informe]
 ```
 
-CrewAI aporta roles y uso autónomo de herramientas. MCP separa el investigador de la
-fuente de referencias. LangGraph controla el orden, los errores, el único reintento,
+CrewAI aporta roles y uso autónomo de herramientas. MCP separa el investigador de la fuente de referencias. LangGraph controla el orden, los errores, el único reintento,
 el checkpoint y la pausa humana; no es un cuarto agente.
 
 ### Función real de cada agente
@@ -81,6 +80,14 @@ describirse como orientativa y heterogénea, no como comparación directa.
 Python es la única fuente oficial de costes, precio, estadísticas y gráfico. La
 revisión impide que el analista o el asesor sustituyan esas cifras. Un rechazo termina
 sin informe; una aprobación reanuda el mismo `thread_id` y guarda una sola vez.
+
+## Despliegue
+
+https://amiguprecio-dlanamarajade.streamlit.app/
+
+## Demo
+
+https://drive.google.com/file/d/1YUdDP4mXWdotdcc70oD_956u1lMzGx-T/view?usp=drive_link
 
 ## Instalación en Windows
 
@@ -158,5 +165,4 @@ locales por hitos. No se simulan ramas, pull requests ni revisiones colaborativa
 no existieron.
 
 - [Auditoría contra el briefing](docs/auditoria_final.md)
-- [Guion de presentación de 7–10 minutos](docs/guion_presentacion.md)
 - [Briefing original](docs/briefing.pdf)
